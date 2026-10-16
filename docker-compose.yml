@@ -86,11 +86,13 @@ services:
     networks:
       - app_network
 
-  nginx:
-    image: nginx:alpine
+    nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    image: dmt-nginx:local
     restart: always
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - static_data:/app/staticfiles:ro
       - media_data:/app/media:ro
     depends_on:
