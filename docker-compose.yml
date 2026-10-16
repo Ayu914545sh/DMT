@@ -43,6 +43,7 @@ services:
       DJANGO_DEBUG: "False"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-prod-secret-key-mca-gst-2026}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DJANGO_CSRF_TRUSTED_ORIGINS: "https://dmt-test.knowletive.in,https://www.dmt-test.knowletive.in"
       DB_ENGINE: postgresql
       DB_NAME: ${DB_NAME:-dmt_db}
       DB_USER: ${DB_USER:-postgres}
@@ -72,6 +73,7 @@ services:
     environment:
       DJANGO_DEBUG: "False"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-prod-secret-key-mca-gst-2026}
+      DJANGO_CSRF_TRUSTED_ORIGINS: "https://dmt-test.knowletive.in,https://www.dmt-test.knowletive.in"
       DB_ENGINE: postgresql
       DB_NAME: ${DB_NAME:-dmt_db}
       DB_USER: ${DB_USER:-postgres}
