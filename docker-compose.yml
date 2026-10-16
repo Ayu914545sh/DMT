@@ -86,7 +86,7 @@ services:
     networks:
       - app_network
 
-    nginx:
+      nginx:
     build:
       context: ./nginx
       dockerfile: Dockerfile
