@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   postgres:
@@ -8,6 +7,8 @@ services:
       POSTGRES_DB: ${DB_NAME:-dmt_db}
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres_secure_pass_2026}
+    volumes:
+      - postgres_data:/var/lib/postgresql
     networks:
       - app_network
     healthcheck:
@@ -30,25 +31,27 @@ services:
       retries: 5
 
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: always
     command: >
       sh -c "python manage.py migrate &&
              python manage.py seed_initial_data &&
              gunicorn --bind 0.0.0.0:8000 --workers 3 --timeout 120 dmt_project.wsgi:application"
     environment:
-      - DJANGO_DEBUG=False
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-prod-secret-key-mca-gst-2026}
-      - DJANGO_ALLOWED_HOSTS=*
-      - DB_ENGINE=postgresql
-      - DB_NAME=${DB_NAME:-dmt_db}
-      - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres_secure_pass_2026}
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - CELERY_ALWAYS_EAGER=False
+      DJANGO_DEBUG: "False"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-prod-secret-key-mca-gst-2026}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      DB_ENGINE: postgresql
+      DB_NAME: ${DB_NAME:-dmt_db}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres_secure_pass_2026}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_ALWAYS_EAGER: "False"
     volumes:
       - static_data:/app/staticfiles
       - media_data:/app/media
@@ -61,21 +64,23 @@ services:
       - app_network
 
   worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: always
     command: celery -A dmt_project worker --loglevel=info --concurrency=2
     environment:
-      - DJANGO_DEBUG=False
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-prod-secret-key-mca-gst-2026}
-      - DB_ENGINE=postgresql
-      - DB_NAME=${DB_NAME:-dmt_db}
-      - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres_secure_pass_2026}
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - CELERY_ALWAYS_EAGER=False
+      DJANGO_DEBUG: "False"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-prod-secret-key-mca-gst-2026}
+      DB_ENGINE: postgresql
+      DB_NAME: ${DB_NAME:-dmt_db}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres_secure_pass_2026}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_ALWAYS_EAGER: "False"
     volumes:
       - media_data:/app/media
     depends_on:
@@ -86,7 +91,7 @@ services:
     networks:
       - app_network
 
-      nginx:
+  nginx:
     build:
       context: ./nginx
       dockerfile: Dockerfile
