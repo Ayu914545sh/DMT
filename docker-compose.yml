@@ -8,8 +8,6 @@ services:
       POSTGRES_DB: ${DB_NAME:-dmt_db}
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres_secure_pass_2026}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
     networks:
       - app_network
     healthcheck:
