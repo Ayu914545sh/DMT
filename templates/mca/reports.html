@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}MCA Reports & Data Export - Unified Data Hub{% endblock %}
+
+{% block content %}
+{% include 'mca/navbar.html' with mca_active_section='reports' %}
+
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">MCA Reports & Audited Data Export</h4>
+        <p class="text-muted small mb-0">Generate sanitized Excel / CSV extracts with formula-injection protection and phone normalization.</p>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- Generate Report Card -->
+    <div class="col-lg-5">
+        <div class="card card-custom p-4 shadow-sm h-100">
+            <h6 class="fw-bold mb-3"><i class="bi bi-file-earmark-bar-graph me-2 text-primary"></i>Generate Filtered MCA Report</h6>
+            <form method="post">
+                {% csrf_token %}
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Entity Type</label>
+                    <select name="entity_type" class="form-select form-select-sm">
+                        <option value="">All Entities (Companies & LLPs)</option>
+                        <option value="company">Companies Only</option>
+                        <option value="llp">LLPs Only</option>
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">State Filter</label>
+                    <select name="state" class="form-select form-select-sm">
+                        <option value="">All States</option>
+                        {% for s in states %}
+                        <option value="{{ s }}">{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Director Phone Quality</label>
+                    <select name="phone_status" class="form-select form-select-sm">
+                        <option value="">All Contact Records</option>
+                        <option value="valid">Valid 10-Digit Mobile Only</option>
+                        <option value="invalid">Flagged / Invalid Numbers</option>
+                    </select>
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label small fw-semibold">Export File Format</label>
+                    <select name="file_format" class="form-select form-select-sm">
+                        <option value="XLSX" selected>Microsoft Excel (.xlsx)</option>
+                        <option value="CSV">Comma Separated Values (.csv)</option>
+                    </select>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-sm w-100 fw-semibold shadow-xs">
+                    <i class="bi bi-download me-1"></i>Generate & Download Report
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Recent Exports Table -->
+    <div class="col-lg-7">
+        <div class="card card-custom shadow-sm h-100 overflow-hidden">
+            <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between">
+                <h6 class="fw-bold mb-0"><i class="bi bi-clock-history me-2 text-primary"></i>Recent MCA Export Jobs</h6>
+                <span class="badge bg-light text-dark border">Audited Downloads</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Job ID</th>
+                                <th>Format</th>
+                                <th>Rows</th>
+                                <th>Status</th>
+                                <th>Generated</th>
+                                <th class="text-end">Download</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for job in recent_exports %}
+                            <tr>
+                                <td class="font-monospace fw-semibold">#{{ job.id }}</td>
+                                <td><span class="badge bg-light text-dark border">{{ job.file_format }}</span></td>
+                                <td class="font-monospace">{{ job.row_count }}</td>
+                                <td>
+                                    {% if job.status == 'COMPLETED' %}
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle">READY</span>
+                                    {% else %}
+                                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle">{{ job.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td><small class="text-muted">{{ job.created_at|date:"d M H:i" }}</small></td>
+                                <td class="text-end">
+                                    {% if job.status == 'COMPLETED' and job.file_path %}
+                                    <a href="{% url 'hub:export_download' job.id %}" class="btn btn-sm btn-outline-primary py-0.5 px-2">
+                                        <i class="bi bi-download"></i>
+                                    </a>
+                                    {% else %}
+                                    <span class="text-muted small">-</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-5">No MCA export jobs generated yet.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

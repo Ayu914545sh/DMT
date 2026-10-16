@@ -1,0 +1,234 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}Batch {{ batch.batch_id }} - Import Center{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0">
+    <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+        <div>
+            <div class="d-flex align-items-center gap-2">
+                <a href="{% url 'hub:import_history' %}" class="btn btn-sm btn-outline-secondary p-1"><i class="bi bi-arrow-left"></i></a>
+                <h4 class="fw-bold mb-0">Import Session: {{ batch.batch_id }}</h4>
+                <span class="badge {% if batch.status == 'COMPLETED' %}bg-success{% elif batch.status == 'FAILED' %}bg-danger{% else %}bg-primary{% endif %}">
+                    {{ batch.status }}
+                </span>
+            </div>
+            <p class="text-muted small mb-0 mt-1">Ingested on {{ batch.created_at|date:"M d, Y H:i" }} by {{ batch.created_by.username|default:"System" }}</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'hub:download_cleaning_report' batch.batch_id %}" class="btn btn-outline-primary btn-sm fw-semibold">
+                <i class="bi bi-file-earmark-arrow-down me-1"></i> Download Cleaning Report (CSV)
+            </a>
+            {% if batch.dataset_type == 'MCA' %}
+            <a href="{% url 'hub:mca_list' %}" class="btn btn-primary btn-sm fw-semibold">
+                <i class="bi bi-buildings me-1"></i> View MCA Records
+            </a>
+            {% else %}
+            <a href="{% url 'hub:gst_list' %}" class="btn btn-primary btn-sm fw-semibold">
+                <i class="bi bi-receipt me-1"></i> View GST Records
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Batch Summary Metrics -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="kpi-card shadow-sm">
+                <div class="kpi-title">Total Input Rows</div>
+                <div class="kpi-value">{{ batch.total_input_rows }}</div>
+                <small class="text-muted">{{ batch.file_name }}</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card shadow-sm">
+                <div class="kpi-title">Published to DB</div>
+                <div class="kpi-value text-success">{{ batch.imported_records }}</div>
+                <small class="text-success"><i class="bi bi-check-circle"></i> Committed</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card shadow-sm">
+                <div class="kpi-title">New / Updated</div>
+                <div class="kpi-value text-primary">{{ batch.proposed_new_records }} / {{ batch.proposed_updates }}</div>
+                <small class="text-muted">{{ batch.unchanged_records }} unchanged</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card shadow-sm">
+                <div class="kpi-title">Flagged / Quarantined</div>
+                <div class="kpi-value text-danger">{{ batch.missing_invalid_values }} / {{ batch.quarantined_rows }}</div>
+                <small class="text-muted">Preserved for review</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Associated Quality Issues Section -->
+    {% if quality_issues %}
+    <div class="card card-custom mb-4 shadow-sm border-warning border-opacity-50">
+        <div class="card-header-custom bg-warning bg-opacity-10">
+            <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-exclamation-triangle-fill text-warning fs-5"></i>
+                <h6 class="fw-bold mb-0">Quality Exceptions Logged During This Batch ({{ quality_issues.count }})</h6>
+            </div>
+            <a href="{% url 'hub:quality_inbox' %}" class="small fw-semibold text-decoration-none">Open Inbox <i class="bi bi-chevron-right"></i></a>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-custom mb-0">
+                <thead>
+                    <tr>
+                        <th>Entity Identifier</th>
+                        <th>Field Name</th>
+                        <th>Error Code</th>
+                        <th>Raw Value</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for issue in quality_issues %}
+                    <tr>
+                        <td class="font-monospace fw-semibold">{{ issue.entity_identifier }}</td>
+                        <td>{{ issue.field_name }}</td>
+                        <td><span class="badge badge-flagged">{{ issue.error_code }}</span></td>
+                        <td class="font-monospace small text-muted">{{ issue.raw_value }}</td>
+                        <td>
+                            {% if issue.is_resolved %}
+                            <span class="badge badge-valid">Resolved</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Open</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if not issue.is_resolved %}
+                            <form action="{% url 'hub:quality_resolve' issue.id %}" method="post" class="d-inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="note" value="Resolved from batch detail inspector">
+                                <button type="submit" class="btn btn-sm btn-outline-success py-0 px-2 small">Resolve</button>
+                            </form>
+                            {% else %}
+                            <span class="small text-muted">Signed off</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Staged Rows Inspector Table -->
+    <div class="card card-custom mb-4 shadow-sm">
+        <div class="card-header-custom">
+            <div class="d-flex align-items-center gap-3">
+                <h6 class="fw-bold mb-0">Row-Level Ingestion Audit</h6>
+                <div class="btn-group btn-group-sm">
+                    <a href="{% url 'hub:import_batch_detail' batch.batch_id %}" class="btn btn-outline-secondary {% if not action_filter %}active{% endif %}">All</a>
+                    <a href="{% url 'hub:import_batch_detail' batch.batch_id %}?action=CREATE" class="btn btn-outline-secondary {% if action_filter == 'CREATE' %}active{% endif %}">Created</a>
+                    <a href="{% url 'hub:import_batch_detail' batch.batch_id %}?action=UPDATE" class="btn btn-outline-secondary {% if action_filter == 'UPDATE' %}active{% endif %}">Updated</a>
+                    <a href="{% url 'hub:import_batch_detail' batch.batch_id %}?action=UNCHANGED" class="btn btn-outline-secondary {% if action_filter == 'UNCHANGED' %}active{% endif %}">Unchanged</a>
+                    <a href="{% url 'hub:import_batch_detail' batch.batch_id %}?action=QUARANTINE" class="btn btn-outline-secondary {% if action_filter == 'QUARANTINE' %}active{% endif %}">Quarantined</a>
+                </div>
+            </div>
+            <div class="small text-muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-custom align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Row #</th>
+                        <th>Action</th>
+                        <th>Entity Identifier</th>
+                        <th>Entity Name</th>
+                        <th>Raw Mobile</th>
+                        <th>Canonical Mobile</th>
+                        <th>Phone Validity</th>
+                        <th>Validation Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for staged in page_obj %}
+                    <tr>
+                        <td class="font-monospace text-muted">{{ staged.row_number }}</td>
+                        <td>
+                            {% if staged.proposed_action == 'CREATE' %}
+                            <span class="badge bg-success-subtle text-success border border-success-subtle">CREATE</span>
+                            {% elif staged.proposed_action == 'UPDATE' %}
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle">UPDATE</span>
+                            {% elif staged.proposed_action == 'UNCHANGED' %}
+                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">UNCHANGED</span>
+                            {% else %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle">QUARANTINE</span>
+                            {% endif %}
+                        </td>
+                        <td class="font-monospace fw-semibold">
+                            {% firstof staged.cleaned_data.entityId staged.cleaned_data.gst_number "-" %}
+                        </td>
+                        <td>
+                            {% firstof staged.cleaned_data.name staged.cleaned_data.trade_name staged.cleaned_data.legal_name "-" %}
+                        </td>
+                        <td class="font-monospace small text-muted">
+                            {% firstof staged.cleaned_data.original_phone staged.cleaned_data.directorMobile staged.cleaned_data.mobile "-" %}
+                        </td>
+                        <td>
+                            {% if staged.cleaned_data.cleaned_phone or staged.cleaned_data.canonical_mobile %}
+                            <div class="font-monospace fw-bold text-dark mb-1">
+                                {{ staged.cleaned_data.cleaned_phone|default:staged.cleaned_data.canonical_mobile|format_phone }}
+                            </div>
+                            {% endif %}
+                            {% with pstatus=staged.cleaned_data.phone_status|default:staged.cleaned_data.phone_validity %}
+                            {% if pstatus == 'valid' or pstatus == 'VALID' %}
+                            <span class="badge badge-valid">VALID</span>
+                            {% elif pstatus == 'cleaned' %}
+                            <span class="badge bg-info-subtle text-info border border-info-subtle">CLEANED</span>
+                            {% elif pstatus == 'multiple_numbers_review' %}
+                            <span class="badge bg-warning-subtle text-dark border border-warning">MULTIPLE NUMBERS</span>
+                            {% elif pstatus == 'invalid' or pstatus == 'FLAGGED' %}
+                            <span class="badge badge-flagged">INVALID (NULL)</span>
+                            {% else %}
+                            <span class="badge badge-blank">MISSING</span>
+                            {% endif %}
+                            {% endwith %}
+                        </td>
+                        <td>
+                            {% if staged.cleaned_data.phone_validity == 'VALID' %}
+                            <span class="badge bg-success-subtle text-success">Valid</span>
+                            {% elif staged.cleaned_data.phone_validity == 'FLAGGED' %}
+                            <span class="badge bg-danger-subtle text-danger">Format Error</span>
+                            {% else %}
+                            <span class="badge bg-light text-muted">Blank</span>
+                            {% endif %}
+                        </td>
+                        <td class="small">
+                            {% for msg in staged.validation_messages %}
+                            <div class="text-danger">&bull; {{ msg }}</div>
+                            {% empty %}
+                            <span class="text-success"><i class="bi bi-check2"></i> Clean</span>
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if page_obj.has_other_pages %}
+        <div class="p-3 border-top d-flex justify-content-between align-items-center">
+            <span class="small text-muted">Showing {{ page_obj.start_index }}-{{ page_obj.end_index }} of {{ page_obj.paginator.count }}</span>
+            <ul class="pagination pagination-sm mb-0">
+                {% if page_obj.has_previous %}
+                <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if action_filter %}&action={{ action_filter }}{% endif %}">Previous</a></li>
+                {% endif %}
+                <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+                {% if page_obj.has_next %}
+                <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{% if action_filter %}&action={{ action_filter }}{% endif %}">Next</a></li>
+                {% endif %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,895 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}MCA Companies & LLPs - Unified Data Hub{% endblock %}
+
+{% block extra_head %}
+<style>
+    .search-input-wrap {
+        position: relative;
+    }
+    .search-input-wrap .clear-btn {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: transparent;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        color: #6c757d;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        font-size: 0.75rem;
+        z-index: 5;
+    }
+    .search-input-wrap .clear-btn:hover {
+        color: #212529;
+        background: #e9ecef;
+    }
+    .search-input-wrap input:not(:placeholder-shown) + .clear-btn {
+        display: flex;
+    }
+    .search-input-wrap input {
+        padding-right: 28px;
+    }
+
+    /* Column Search Filter Row Styling */
+    .table-filter-row th {
+        padding: 6px 6px !important;
+        background-color: #f8fafc;
+        border-bottom: 2px solid #e2e8f0;
+        vertical-align: middle;
+    }
+    .col-filter-wrap {
+        position: relative;
+        width: 100%;
+    }
+    .col-filter-wrap .col-filter-input {
+        font-size: 0.78rem;
+        padding: 0.28rem 1.6rem 0.28rem 0.5rem;
+        height: 30px;
+        border-radius: 4px;
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        box-shadow: none;
+        transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    }
+    .col-filter-wrap .col-filter-input:focus {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+    }
+    .col-filter-wrap .col-clear-btn {
+        position: absolute;
+        right: 4px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: transparent;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        color: #94a3b8;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        font-size: 0.85rem;
+        z-index: 5;
+    }
+    .col-filter-wrap .col-clear-btn:hover {
+        color: #0f172a;
+        background: #e2e8f0;
+    }
+    .col-filter-wrap.has-value .col-clear-btn,
+    .col-filter-wrap input:not(:placeholder-shown) ~ .col-clear-btn {
+        display: flex;
+    }
+
+    #tableLoadingOverlay {
+        backdrop-filter: blur(2px);
+        transition: opacity 0.2s ease-in-out;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% include 'mca/navbar.html' with mca_active_section='companies' %}
+
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">MCA Companies & LLPs</h4>
+        <p class="text-muted small mb-0">Authoritative entity master &bull; Distinct director relationships &bull; <span id="totalCountDisplay" class="fw-bold text-dark">{{ total_count }}</span> total entities</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <a href="{% url 'hub:mca_export_excel' %}?scope=filtered{% if request.GET.urlencode %}&{{ request.GET.urlencode }}{% endif %}" 
+           class="btn btn-success btn-sm fw-semibold shadow-xs btn-export-excel" 
+           data-module="mca"
+           data-count="{{ total_count|default:0 }}"
+           title="Export currently filtered MCA records to Excel">
+            <i class="bi bi-file-earmark-excel me-1 export-icon"></i>
+            <span class="export-btn-text">Export filtered Excel ({{ total_count|default:0 }} record{{ total_count|default:0|pluralize }})</span>
+        </a>
+        {% if has_active_filters %}
+        <button type="button" class="btn btn-outline-danger btn-sm btn-clear-all-filters fw-semibold">
+            <i class="bi bi-x-circle me-1"></i>Clear All Filters
+        </button>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Filters Bar with Search Input Fields -->
+<div class="card card-custom p-3 mb-4 shadow-sm">
+    <form method="get" id="filterForm" class="row g-2 align-items-center">
+        <!-- Hidden page input to reset pagination when user changes any search filter -->
+        <input type="hidden" name="page" id="pageInput" value="1">
+
+        <!-- 1. General Search (Company, CIN, Director, Email) -->
+        <div class="col-12 col-md-3">
+            <div class="input-group input-group-sm search-input-wrap">
+                <span class="input-group-text bg-light text-muted"><i class="bi bi-search"></i></span>
+                <input type="text" name="q" id="queryInput" class="form-control debounced-search" placeholder="Search Company, CIN, Director..." value="{{ search }}" autocomplete="off">
+                <button type="button" class="clear-btn" data-target="queryInput" title="Clear Search" aria-label="Clear Search">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 2. Entity Type Search -->
+        <div class="col-12 col-md-2">
+            <div class="input-group input-group-sm search-input-wrap">
+                <span class="input-group-text bg-light text-muted"><i class="bi bi-diagram-3"></i></span>
+                <input type="text" name="entity_type" id="entityTypeInput" class="form-control debounced-search" placeholder="Type (Company/LLP)..." value="{{ entity_type }}" autocomplete="off">
+                <button type="button" class="clear-btn" data-target="entityTypeInput" title="Clear Entity Type" aria-label="Clear Entity Type">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 3. State Search -->
+        <div class="col-12 col-md-2">
+            <div class="input-group input-group-sm search-input-wrap">
+                <span class="input-group-text bg-light text-muted"><i class="bi bi-geo-alt"></i></span>
+                <input type="text" name="state" id="stateInput" class="form-control debounced-search" placeholder="Search State..." value="{{ state }}" autocomplete="off">
+                <button type="button" class="clear-btn" data-target="stateInput" title="Clear State" aria-label="Clear State">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 4. ROC Search -->
+        <div class="col-12 col-md-2">
+            <div class="input-group input-group-sm search-input-wrap">
+                <span class="input-group-text bg-light text-muted"><i class="bi bi-building"></i></span>
+                <input type="text" name="roc" id="rocInput" class="form-control debounced-search" placeholder="Search ROC..." value="{{ roc }}" autocomplete="off">
+                <button type="button" class="clear-btn" data-target="rocInput" title="Clear ROC" aria-label="Clear ROC">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 5. Contact Validity / Phone Search -->
+        <div class="col-12 col-md-2">
+            <div class="input-group input-group-sm search-input-wrap">
+                <span class="input-group-text bg-light text-muted"><i class="bi bi-telephone"></i></span>
+                <input type="text" name="phone_status" id="phoneStatusInput" class="form-control debounced-search" placeholder="Phone (Valid/Flagged/Blank)..." value="{{ phone_filter }}" autocomplete="off">
+                <button type="button" class="clear-btn" data-target="phoneStatusInput" title="Clear Contact Validity" aria-label="Clear Contact Validity">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Action / Reset Buttons -->
+        <div class="col-12 col-md-1 d-flex gap-1">
+            <button type="submit" class="btn btn-primary btn-sm w-100 fw-semibold" title="Search">
+                <i class="bi bi-search"></i>
+            </button>
+            {% if search or entity_type or state or roc or phone_filter or col_filters.f_entity_id or col_filters.f_entity_type or col_filters.f_name or col_filters.f_state or col_filters.f_city or col_filters.f_roc or col_filters.f_email or col_filters.f_director %}
+            <a href="{% url 'hub:mca_list' %}" class="btn btn-outline-secondary btn-sm btn-clear-all-filters" title="Clear All Filters"><i class="bi bi-x-lg"></i></a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<!-- Companies Table with Per-Column Fast Search Filters -->
+<div class="card card-custom shadow-sm overflow-hidden mb-4 position-relative">
+    <!-- Table Loading Overlay -->
+    <div id="tableLoadingOverlay" class="position-absolute top-0 start-0 w-100 h-100 d-none bg-white bg-opacity-75 d-flex align-items-center justify-content-center" style="z-index: 15;">
+        <div class="spinner-border text-primary spinner-border-sm me-2" role="status"></div>
+        <span class="small fw-semibold text-secondary">Searching entire dataset...</span>
+    </div>
+
+    <!-- Error state banner -->
+    <div id="tableErrorBanner" class="alert alert-danger m-3 d-none align-items-center justify-content-between py-2 px-3 small" role="alert">
+        <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+            <span id="tableErrorMessage">Failed to load search results. Please check your connection.</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2 fw-semibold" id="tableRetryBtn">Retry</button>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-custom align-middle mb-0" id="mcaTable">
+            <thead>
+                <tr>
+                    <th style="min-width: 170px;">Entity Identifier</th>
+                    <th style="min-width: 110px;">Type</th>
+                    <th style="min-width: 240px;">Company Name</th>
+                    <th style="min-width: 130px;">State</th>
+                    <th style="min-width: 130px;">City</th>
+                    <th style="min-width: 120px;">ROC</th>
+                    <th style="min-width: 160px;">Email / Capital</th>
+                    <th style="min-width: 160px;">Directors / People</th>
+                    <th style="min-width: 100px;" class="text-end">Actions</th>
+                </tr>
+                <!-- Dedicated compact search filter row below every column heading -->
+                <tr class="table-filter-row bg-light" id="columnFilterRow">
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_entity_id %}has-value{% endif %}">
+                            <input type="text" name="f_entity_id" class="form-control form-control-sm col-filter-input" placeholder="Search CIN/LLPIN..." value="{{ col_filters.f_entity_id|default:'' }}" autocomplete="off" aria-label="Filter Entity Identifier">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_entity_type %}has-value{% endif %}">
+                            <input type="text" name="f_entity_type" class="form-control form-control-sm col-filter-input" placeholder="Company/LLP..." value="{{ col_filters.f_entity_type|default:'' }}" autocomplete="off" aria-label="Filter Type">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_name %}has-value{% endif %}">
+                            <input type="text" name="f_name" class="form-control form-control-sm col-filter-input" placeholder="Search company (e.g. tech)..." value="{{ col_filters.f_name|default:'' }}" autocomplete="off" aria-label="Filter Company Name">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_state %}has-value{% endif %}">
+                            <input type="text" name="f_state" class="form-control form-control-sm col-filter-input" placeholder="Search state..." value="{{ col_filters.f_state|default:'' }}" autocomplete="off" aria-label="Filter State">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_city %}has-value{% endif %}">
+                            <input type="text" name="f_city" class="form-control form-control-sm col-filter-input" placeholder="Search city (e.g. Pune)..." value="{{ col_filters.f_city|default:'' }}" autocomplete="off" aria-label="Filter City">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_roc %}has-value{% endif %}">
+                            <input type="text" name="f_roc" class="form-control form-control-sm col-filter-input" placeholder="Search ROC..." value="{{ col_filters.f_roc|default:'' }}" autocomplete="off" aria-label="Filter ROC">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_email %}has-value{% endif %}">
+                            <input type="text" name="f_email" class="form-control form-control-sm col-filter-input" placeholder="Search email..." value="{{ col_filters.f_email|default:'' }}" autocomplete="off" aria-label="Filter Email">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="col-filter-wrap {% if col_filters.f_director or col_filters.f_phone %}has-value{% endif %}">
+                            <input type="text" name="f_director" class="form-control form-control-sm col-filter-input" placeholder="Director / Phone..." value="{{ col_filters.f_director|default:col_filters.f_phone|default:'' }}" autocomplete="off" aria-label="Filter Director or Phone">
+                            <button type="button" class="col-clear-btn" title="Clear filter" aria-label="Clear filter"><i class="bi bi-x"></i></button>
+                        </div>
+                    </th>
+                    <th class="text-end">
+                        <button type="button" class="btn btn-sm btn-outline-secondary w-100 btn-clear-all-filters py-1 px-2 fw-semibold" title="Clear all active filters" style="font-size: 0.76rem; height: 30px;">
+                            <i class="bi bi-x-circle me-1"></i>Clear
+                        </button>
+                    </th>
+                </tr>
+            </thead>
+            <!-- Dynamic Table Body & Pagination Content -->
+            {% include 'mca/_table_content.html' %}
+        </table>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold" id="deleteConfirmModalLabel">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Confirm Record Deletion
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" id="modalCloseBtn"></button>
+            </div>
+            <div class="modal-body p-4">
+                <p class="text-secondary mb-3">
+                    Are you sure you want to permanently delete this record?
+                </p>
+                <div class="p-3 bg-light rounded border mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-muted small">Record Name:</span>
+                        <strong class="text-dark" id="modalRecordName">-</strong>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-muted small">Entity Identifier:</span>
+                        <span class="font-monospace fw-bold text-primary" id="modalRecordIdentifier">-</span>
+                    </div>
+                </div>
+                <div class="alert alert-warning py-2 px-3 small mb-0 d-flex align-items-center gap-2">
+                    <i class="bi bi-shield-exclamation text-warning fs-5"></i>
+                    <div>
+                        <strong>Warning:</strong> This action cannot be easily undone. All associated directors and contact records will also be permanently deleted.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer bg-light px-4 py-3">
+                <button type="button" class="btn btn-secondary fw-semibold px-3" data-bs-dismiss="modal" id="modalCancelBtn">
+                    Cancel
+                </button>
+                <button type="button" class="btn btn-danger fw-semibold px-4 d-inline-flex align-items-center gap-2" id="modalConfirmDeleteBtn">
+                    <span class="spinner-border spinner-border-sm d-none" id="deleteSpinner" role="status" aria-hidden="true"></span>
+                    <i class="bi bi-trash" id="deleteBtnIcon"></i>
+                    <span id="deleteBtnText">Delete</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const topForm = document.getElementById('filterForm');
+        const pageInput = document.getElementById('pageInput');
+        const table = document.getElementById('mcaTable');
+        const totalCountDisplay = document.getElementById('totalCountDisplay');
+        const loadingOverlay = document.getElementById('tableLoadingOverlay');
+        const errorBanner = document.getElementById('tableErrorBanner');
+        const errorMessage = document.getElementById('tableErrorMessage');
+        const retryBtn = document.getElementById('tableRetryBtn');
+
+        let debounceTimeout = null;
+        let activeAbortController = null;
+        let requestSequence = 0;
+        let currentPage = 1;
+
+        // Gather all current filter values
+        function collectFilterParams(pageOverride) {
+            const params = new URLSearchParams();
+
+            // 1. Column filters
+            document.querySelectorAll('.col-filter-input').forEach(input => {
+                const val = input.value.trim();
+                if (val) {
+                    params.set(input.name, val);
+                }
+            });
+
+            // 2. Top search form inputs
+            if (topForm) {
+                const topInputs = topForm.querySelectorAll('input:not([name="page"]):not(.col-filter-input), select');
+                topInputs.forEach(inp => {
+                    const val = inp.value.trim();
+                    if (val && !params.has(inp.name)) {
+                        params.set(inp.name, val);
+                    }
+                });
+            }
+
+            // 3. Preserve sort parameter from URL if active
+            const currentUrlParams = new URLSearchParams(window.location.search);
+            if (currentUrlParams.has('sort') && !params.has('sort')) {
+                params.set('sort', currentUrlParams.get('sort'));
+            }
+
+            // Page
+            const page = pageOverride !== undefined ? pageOverride : (pageInput ? pageInput.value : '1');
+            if (page && page !== '1') {
+                params.set('page', page);
+            }
+
+            return params;
+        }
+
+        // Update active export links on page so exports match active filters
+        function updateExportLinks(params, count) {
+            const queryStr = params.toString();
+
+            // 1. Export JSON link
+            document.querySelectorAll('a[href*="/mca/export/json/"]').forEach(jsonLink => {
+                jsonLink.href = '/mca/export/json/' + (queryStr ? '?' + queryStr : '');
+            });
+
+            // 2. Export Filtered Excel links (remove page and format to export all matching records across all pages)
+            const excelParams = new URLSearchParams(queryStr);
+            excelParams.set('scope', 'filtered');
+            excelParams.delete('page');
+            excelParams.delete('format');
+            const excelHref = '/mca/export/excel/?' + excelParams.toString();
+
+            document.querySelectorAll('a[href*="/mca/export/excel/"][href*="scope=filtered"], .btn-export-excel[data-module="mca"]').forEach(excelBtn => {
+                excelBtn.href = excelHref;
+                if (count !== undefined) {
+                    excelBtn.dataset.count = count;
+                    const textSpan = excelBtn.querySelector('.export-btn-text');
+                    if (textSpan) {
+                        textSpan.textContent = `Export filtered Excel (${count} record${count === 1 ? '' : 's'})`;
+                    }
+                }
+            });
+        }
+
+        // Fast AJAX search with debouncing and in-flight request cancellation
+        function performSearch(pageOverride) {
+            const thisSeq = ++requestSequence;
+            if (pageOverride !== undefined) {
+                currentPage = pageOverride;
+                if (pageInput) pageInput.value = pageOverride;
+            }
+
+            // Cancel any previous in-flight request so outdated results are never rendered
+            if (activeAbortController) {
+                activeAbortController.abort();
+            }
+            activeAbortController = new AbortController();
+
+            const params = collectFilterParams(pageOverride);
+            updateExportLinks(params);
+
+            // Update browser URL without reloading
+            const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+            window.history.replaceState({ path: newUrl }, '', newUrl);
+
+            // Show loading state
+            if (loadingOverlay) loadingOverlay.classList.remove('d-none');
+            if (errorBanner) errorBanner.classList.add('d-none');
+
+            // Add partial format flag
+            params.set('format', 'partial');
+
+            fetch(window.location.pathname + '?' + params.toString(), {
+                signal: activeAbortController.signal,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('Network error ' + res.status);
+                return res.json();
+            })
+            .then(data => {
+                // Ignore if a newer request was dispatched
+                if (thisSeq !== requestSequence) return;
+
+                if (loadingOverlay) loadingOverlay.classList.add('d-none');
+
+                if (data.success) {
+                    // Update table body and pagination
+                    const existingTbody = document.getElementById('mcaTableBody');
+                    const existingPag = document.getElementById('paginationWrapper');
+
+                    if (existingTbody) existingTbody.remove();
+                    if (existingPag) existingPag.remove();
+
+                    // Parse returned HTML and insert
+                    const temp = document.createElement('div');
+                    temp.innerHTML = '<table>' + data.html + '</table>';
+                    const newTbody = temp.querySelector('tbody');
+                    const newPag = temp.querySelector('#paginationWrapper');
+
+                    if (newTbody) table.appendChild(newTbody);
+                    if (newPag) table.closest('.card').appendChild(newPag);
+
+                    // Update total count display and export buttons
+                    if (totalCountDisplay) {
+                        totalCountDisplay.textContent = data.total_count;
+                    }
+                    updateExportLinks(params, data.total_count);
+
+                    // Re-bind listeners for collapse, delete, and pagination
+                    bindTableListeners();
+                }
+            })
+            .catch(err => {
+                if (err.name === 'AbortError') return; // Cancelled as expected
+                if (thisSeq !== requestSequence) return;
+
+                if (loadingOverlay) loadingOverlay.classList.add('d-none');
+                if (errorBanner) {
+                    errorBanner.classList.remove('d-none');
+                    if (errorMessage) errorMessage.textContent = 'Failed to load search results: ' + err.message;
+                }
+            });
+        }
+
+        // Debounced input handler (300 ms)
+        function triggerDebouncedSearch(resetPage) {
+            clearTimeout(debounceTimeout);
+            debounceTimeout = setTimeout(() => {
+                performSearch(resetPage ? 1 : currentPage);
+            }, 300);
+        }
+
+        // Attach listeners to column filter inputs
+        document.querySelectorAll('.col-filter-input').forEach(input => {
+            const wrap = input.closest('.col-filter-wrap');
+
+            // Set initial has-value state
+            if (input.value.trim() && wrap) {
+                wrap.classList.add('has-value');
+            }
+
+            input.addEventListener('input', function () {
+                if (wrap) {
+                    if (this.value.trim()) {
+                        wrap.classList.add('has-value');
+                    } else {
+                        wrap.classList.remove('has-value');
+                    }
+                }
+                triggerDebouncedSearch(true);
+            });
+
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    clearTimeout(debounceTimeout);
+                    performSearch(1);
+                }
+            });
+        });
+
+        // Top form search inputs
+        document.querySelectorAll('.debounced-search').forEach(input => {
+            input.addEventListener('input', function () {
+                triggerDebouncedSearch(true);
+            });
+        });
+
+        // Individual clear buttons for column inputs
+        document.querySelectorAll('.col-clear-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const wrap = this.closest('.col-filter-wrap');
+                if (wrap) {
+                    const input = wrap.querySelector('.col-filter-input');
+                    if (input) {
+                        input.value = '';
+                        wrap.classList.remove('has-value');
+                        input.focus();
+                        clearTimeout(debounceTimeout);
+                        performSearch(1);
+                    }
+                }
+            });
+        });
+
+        // Clear buttons in top search bar
+        document.querySelectorAll('.clear-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const targetId = this.getAttribute('data-target');
+                const targetInput = document.getElementById(targetId);
+                if (targetInput) {
+                    targetInput.value = '';
+                    clearTimeout(debounceTimeout);
+                    performSearch(1);
+                }
+            });
+        });
+
+        // Clear All Filters action
+        document.querySelectorAll('.btn-clear-all-filters').forEach(btn => {
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                // Clear column inputs
+                document.querySelectorAll('.col-filter-input').forEach(inp => {
+                    inp.value = '';
+                    const wrap = inp.closest('.col-filter-wrap');
+                    if (wrap) wrap.classList.remove('has-value');
+                });
+                // Clear top form inputs
+                if (topForm) {
+                    topForm.querySelectorAll('input:not([name="page"]), select').forEach(inp => {
+                        inp.value = '';
+                    });
+                }
+                clearTimeout(debounceTimeout);
+                performSearch(1);
+            });
+        });
+
+        // Retry button
+        if (retryBtn) {
+            retryBtn.addEventListener('click', function () {
+                performSearch(currentPage);
+            });
+        }
+
+        // Bind interactive elements inside table body and pagination
+        function bindTableListeners() {
+            // 1. AJAX Pagination links
+            document.querySelectorAll('.ajax-page-link').forEach(link => {
+                link.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const page = this.getAttribute('data-page');
+                    if (page) {
+                        performSearch(parseInt(page, 10));
+                        window.scrollTo({ top: table.offsetTop - 120, behavior: 'smooth' });
+                    }
+                });
+            });
+
+            // 2. Collapse chevron toggling
+            document.querySelectorAll('.entity-detail-collapse').forEach(collapseEl => {
+                collapseEl.addEventListener('show.bs.collapse', function () {
+                    const targetId = this.getAttribute('id');
+                    const triggerBtn = document.querySelector(`[data-bs-target="#${targetId}"]`);
+                    if (triggerBtn) {
+                        triggerBtn.setAttribute('aria-expanded', 'true');
+                        triggerBtn.setAttribute('aria-label', 'Collapse entity details');
+                        triggerBtn.setAttribute('title', 'Collapse entity details');
+                        const icon = triggerBtn.querySelector('.toggle-icon');
+                        if (icon) {
+                            icon.classList.remove('bi-chevron-down');
+                            icon.classList.add('bi-chevron-up');
+                        }
+                    }
+                });
+
+                collapseEl.addEventListener('hide.bs.collapse', function () {
+                    const targetId = this.getAttribute('id');
+                    const triggerBtn = document.querySelector(`[data-bs-target="#${targetId}"]`);
+                    if (triggerBtn) {
+                        triggerBtn.setAttribute('aria-expanded', 'false');
+                        triggerBtn.setAttribute('aria-label', 'Expand entity details');
+                        triggerBtn.setAttribute('title', 'Expand entity details');
+                        const icon = triggerBtn.querySelector('.toggle-icon');
+                        if (icon) {
+                            icon.classList.remove('bi-chevron-up');
+                            icon.classList.add('bi-chevron-down');
+                        }
+                    }
+                });
+            });
+
+            // 3. Clear all buttons inside empty state
+            document.querySelectorAll('#mcaTableBody .btn-clear-all-filters').forEach(btn => {
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    document.querySelectorAll('.col-filter-input').forEach(inp => {
+                        inp.value = '';
+                        const wrap = inp.closest('.col-filter-wrap');
+                        if (wrap) wrap.classList.remove('has-value');
+                    });
+                    if (topForm) {
+                        topForm.querySelectorAll('input:not([name="page"]), select').forEach(inp => {
+                            inp.value = '';
+                        });
+                    }
+                    clearTimeout(debounceTimeout);
+                    performSearch(1);
+                });
+            });
+
+            // 4. Delete record modal trigger
+            bindDeleteButtons();
+        }
+
+        // ==========================================
+        // Delete Confirmation & Execution Workflow
+        // ==========================================
+        const modalEl = document.getElementById('deleteConfirmModal');
+        let deleteModalInstance = null;
+        if (modalEl && typeof bootstrap !== 'undefined') {
+            deleteModalInstance = new bootstrap.Modal(modalEl);
+        }
+
+        const modalRecordName = document.getElementById('modalRecordName');
+        const modalRecordIdentifier = document.getElementById('modalRecordIdentifier');
+        const confirmDeleteBtn = document.getElementById('modalConfirmDeleteBtn');
+        const cancelBtn = document.getElementById('modalCancelBtn');
+        const closeBtn = document.getElementById('modalCloseBtn');
+        const deleteSpinner = document.getElementById('deleteSpinner');
+        const deleteBtnIcon = document.getElementById('deleteBtnIcon');
+        const deleteBtnText = document.getElementById('deleteBtnText');
+        const flashContainer = document.getElementById('flashMessagesContainer');
+
+        let activeDeleteTarget = null;
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
+        function showNotification(type, message) {
+            if (!flashContainer) return;
+            const alertDiv = document.createElement('div');
+            const iconClass = type === 'success' ? 'bi-check-circle-fill text-success' : (type === 'danger' ? 'bi-exclamation-triangle-fill text-danger' : 'bi-info-circle-fill text-info');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show shadow-sm`;
+            alertDiv.setAttribute('role', 'alert');
+            alertDiv.innerHTML = `
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi ${iconClass} fs-5"></i>
+                    <div>${message}</div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            flashContainer.prepend(alertDiv);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function bindDeleteButtons() {
+            document.querySelectorAll('.btn-delete-record').forEach(btn => {
+                btn.onclick = function (e) {
+                    e.preventDefault();
+                    activeDeleteTarget = {
+                        btn: this,
+                        id: this.getAttribute('data-record-id'),
+                        name: this.getAttribute('data-record-name'),
+                        identifier: this.getAttribute('data-record-identifier'),
+                        url: this.getAttribute('data-delete-url')
+                    };
+
+                    if (modalRecordName) modalRecordName.textContent = activeDeleteTarget.name || '-';
+                    if (modalRecordIdentifier) modalRecordIdentifier.textContent = activeDeleteTarget.identifier || '-';
+
+                    confirmDeleteBtn.disabled = false;
+                    cancelBtn.disabled = false;
+                    closeBtn.disabled = false;
+                    deleteSpinner.classList.add('d-none');
+                    deleteBtnIcon.classList.remove('d-none');
+                    deleteBtnText.textContent = 'Delete';
+
+                    if (deleteModalInstance) {
+                        deleteModalInstance.show();
+                    }
+                };
+            });
+        }
+
+        if (confirmDeleteBtn) {
+            confirmDeleteBtn.addEventListener('click', function () {
+                if (!activeDeleteTarget) return;
+
+                confirmDeleteBtn.disabled = true;
+                cancelBtn.disabled = true;
+                closeBtn.disabled = true;
+                deleteSpinner.classList.remove('d-none');
+                deleteBtnIcon.classList.add('d-none');
+                deleteBtnText.textContent = 'Deleting…';
+
+                const csrftoken = getCookie('csrftoken');
+                fetch(activeDeleteTarget.url, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrftoken,
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (deleteModalInstance) deleteModalInstance.hide();
+                    if (data.success) {
+                        showNotification('success', data.message || `Record '${activeDeleteTarget.identifier}' was successfully deleted.`);
+                        performSearch(currentPage);
+                    } else {
+                        showNotification('danger', data.error || 'Failed to delete record.');
+                    }
+                })
+                .catch(err => {
+                    if (deleteModalInstance) deleteModalInstance.hide();
+                    showNotification('danger', 'An unexpected error occurred while deleting the record.');
+                });
+            });
+        }
+
+        function showExportAlert(message, type = 'warning') {
+            const container = document.getElementById('flashMessagesContainer');
+            if (!container) {
+                alert(message);
+                return;
+            }
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show shadow-sm`;
+            alertDiv.setAttribute('role', 'alert');
+            alertDiv.innerHTML = `
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-exclamation-triangle-fill text-${type === 'error' ? 'danger' : (type === 'success' ? 'success' : 'warning')} fs-5"></i>
+                    <div>${message}</div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            container.prepend(alertDiv);
+            alertDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            setTimeout(() => {
+                try {
+                    const bsAlert = bootstrap.Alert.getOrCreateInstance(alertDiv);
+                    bsAlert.close();
+                } catch (_) {
+                    alertDiv.remove();
+                }
+            }, 6000);
+        }
+
+        // Hook Excel Export with loading indicator and validation
+        document.addEventListener('click', function(e) {
+            const btn = e.target.closest('.btn-export-excel[data-module="mca"]');
+            if (!btn) return;
+
+            e.preventDefault();
+            const count = parseInt(btn.dataset.count !== undefined ? btn.dataset.count : (totalCountDisplay?.textContent || '0'), 10);
+
+            if (isNaN(count) || count <= 0) {
+                showExportAlert("No matching records to export.", "warning");
+                return;
+            }
+
+            const originalHtml = btn.innerHTML;
+            btn.classList.add('disabled');
+            btn.setAttribute('aria-disabled', 'true');
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span><span class="export-btn-text">Exporting Excel (${count} records)...</span>`;
+
+            fetch(btn.href, {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(async res => {
+                if (!res.ok) {
+                    let errorMsg = "No matching records to export.";
+                    try {
+                        const errData = await res.json();
+                        if (errData && errData.message) errorMsg = errData.message;
+                    } catch (_) {}
+                    throw new Error(errorMsg);
+                }
+
+                let filename = 'mca_export.xlsx';
+                const disposition = res.headers.get('Content-Disposition');
+                if (disposition && disposition.indexOf('filename=') !== -1) {
+                    const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+                    if (matches != null && matches[1]) {
+                        filename = matches[1].replace(/['"]/g, '');
+                    }
+                }
+
+                return res.blob().then(blob => ({ blob, filename }));
+            })
+            .then(({ blob, filename }) => {
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = downloadUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(downloadUrl);
+                a.remove();
+                showExportAlert(`Export successful! Downloaded ${count} records matching active filters.`, "success");
+            })
+            .catch(err => {
+                showExportAlert(err.message || "No matching records to export.", "warning");
+            })
+            .finally(() => {
+                btn.innerHTML = originalHtml;
+                btn.classList.remove('disabled');
+                btn.removeAttribute('aria-disabled');
+            });
+        });
+
+        // Initial setup
+        bindTableListeners();
+        updateExportLinks(collectFilterParams(), {{ total_count|default:0 }});
+    });
+</script>
+{% endblock %}

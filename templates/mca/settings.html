@@ -1,0 +1,141 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}MCA Module Settings - Unified Data Hub{% endblock %}
+
+{% block content %}
+{% include 'mca/navbar.html' with mca_active_section='settings' %}
+
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">MCA Module & Profile Settings</h4>
+        <p class="text-muted small mb-0">Manage user profile, administrative password security, and active session preferences.</p>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- User Profile & Session Information -->
+    <div class="col-lg-5">
+        <div class="card card-custom p-4 shadow-sm h-100">
+            <h6 class="fw-bold mb-3"><i class="bi bi-person-badge me-2 text-primary"></i>Authenticated User Profile</h6>
+            <div class="d-flex align-items-center gap-3 mb-4 pb-3 border-bottom">
+                <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center fw-bold fs-4" style="width: 56px; height: 56px;">
+                    {{ request.user.username|slice:":1"|upper }}
+                </div>
+                <div>
+                    <h5 class="fw-bold mb-0 text-dark">{{ request.user.username }}</h5>
+                    <span class="badge {% if request.user.is_superuser %}bg-danger{% else %}bg-secondary{% endif %}">
+                        {% if request.user.is_superuser %}System Administrator{% else %}Data Operations Staff{% endif %}
+                    </span>
+                </div>
+            </div>
+
+            <div class="list-group list-group-flush small mb-4">
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Email</span>
+                    <span class="fw-semibold">{{ request.user.email|default:"Not specified" }}</span>
+                </div>
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Account Status</span>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle">Active & Verified</span>
+                </div>
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Module Permissions</span>
+                    <span class="fw-semibold text-primary">MCA & GST Full Access</span>
+                </div>
+            </div>
+
+            <div class="pt-3 border-top d-flex gap-2">
+                <button type="button" class="btn btn-outline-danger btn-sm fw-semibold w-100" data-bs-toggle="modal" data-bs-target="#logoutConfirmModal">
+                    <i class="bi bi-box-arrow-right me-1"></i>Log Out
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Card (Admin only or protected) -->
+    <div class="col-lg-7">
+        <div class="card card-custom p-4 shadow-sm h-100">
+            <h6 class="fw-bold mb-2"><i class="bi bi-shield-lock me-2 text-primary"></i>Change Password</h6>
+            <p class="text-muted small mb-4">Update administrative credentials. All existing sessions will be securely invalidated upon change.</p>
+
+            {% if password_form %}
+            <form action="{% url 'hub:admin_change_password' %}" method="post">
+                {% csrf_token %}
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Current Password</label>
+                    <div class="input-group input-group-sm">
+                        <input type="password" name="current_password" class="form-control" id="mcaCurrentPassword" required>
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePasswordVisibility('mcaCurrentPassword', this)">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">New Password</label>
+                    <div class="input-group input-group-sm">
+                        <input type="password" name="new_password" class="form-control" id="mcaNewPassword" required>
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePasswordVisibility('mcaNewPassword', this)">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                    <small class="text-muted d-block mt-1">Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special symbol.</small>
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label small fw-semibold">Confirm New Password</label>
+                    <div class="input-group input-group-sm">
+                        <input type="password" name="confirm_password" class="form-control" id="mcaConfirmPassword" required>
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePasswordVisibility('mcaConfirmPassword', this)">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-sm fw-semibold shadow-xs">
+                    <i class="bi bi-check-circle me-1"></i>Save New Password
+                </button>
+            </form>
+            {% else %}
+            <div class="alert alert-light border p-3 small text-muted">
+                <i class="bi bi-info-circle me-1 text-primary"></i>
+                Password management requires administrator privileges.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Logout Confirmation Modal -->
+<div class="modal fade" id="logoutConfirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header bg-dark text-white">
+                <h6 class="modal-title fw-bold"><i class="bi bi-box-arrow-right me-2 text-warning"></i>Confirm Sign Out</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4">
+                <p class="mb-0">Are you sure you want to end your active session and sign out of the Unified Data Hub?</p>
+            </div>
+            <div class="modal-footer bg-light-subtle">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <a href="{% url 'hub:logout' %}" class="btn btn-danger btn-sm fw-semibold">Log Out</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function togglePasswordVisibility(fieldId, btn) {
+    const input = document.getElementById(fieldId);
+    if (!input) return;
+    const isPass = input.type === 'password';
+    input.type = isPass ? 'text' : 'password';
+    const icon = btn.querySelector('i');
+    if (icon) {
+        icon.className = isPass ? 'bi bi-eye-slash' : 'bi bi-eye';
+    }
+}
+</script>
+{% endblock %}

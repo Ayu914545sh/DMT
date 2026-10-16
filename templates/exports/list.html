@@ -1,0 +1,114 @@
+{% extends 'base.html' %}
+
+{% block title %}Exports - Unified Data Hub{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">Export Management</h4>
+        <p class="text-muted small mb-0">Audited dataset extraction &bull; Formula injection protection &bull; Phone text preservation</p>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- Export Form -->
+    <div class="col-lg-5">
+        <div class="card card-custom p-4 shadow-sm h-100">
+            <h6 class="fw-bold mb-3"><i class="bi bi-file-earmark-arrow-down me-2 text-primary"></i>Generate New Export</h6>
+            <form method="post">
+                {% csrf_token %}
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Dataset</label>
+                    {{ form.dataset_type }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Output Format</label>
+                    {{ form.file_format }}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">State Scope (Optional)</label>
+                    {{ form.state_filter }}
+                </div>
+                <div class="mb-4">
+                    <label class="form-label small fw-semibold">Status / Entity Type Scope (Optional)</label>
+                    {{ form.status_filter }}
+                </div>
+
+                <div class="alert alert-light border small text-muted mb-4 p-2">
+                    <i class="bi bi-shield-check text-success me-1"></i>
+                    <strong>Export Security Guards:</strong><br>
+                    &bull; Phone numbers and CIN/GSTINs formatted strictly as text.<br>
+                    &bull; Formula characters (=, +, -, @) prepended with quotes to prevent CSV injection.
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100 fw-semibold shadow-sm">
+                    Generate Export File
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Export Jobs History -->
+    <div class="col-lg-7">
+        <div class="card card-custom shadow-sm h-100 overflow-hidden">
+            <div class="card-header-custom">
+                <h6 class="fw-bold mb-0">Your Recent Export Jobs</h6>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-custom align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Job #</th>
+                            <th>Dataset</th>
+                            <th>Format</th>
+                            <th>Records</th>
+                            <th>Status</th>
+                            <th>Date</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job in jobs %}
+                        <tr>
+                            <td class="font-monospace text-muted">#{{ job.id }}</td>
+                            <td>
+                                <span class="badge {% if job.dataset_type == 'MCA' %}badge-company{% else %}bg-primary-subtle text-primary border{% endif %}">
+                                    {{ job.dataset_type }}
+                                </span>
+                            </td>
+                            <td><span class="badge bg-light text-dark border">{{ job.file_format }}</span></td>
+                            <td><strong>{{ job.row_count }}</strong></td>
+                            <td>
+                                {% if job.status == 'COMPLETED' %}
+                                <span class="badge badge-valid">READY</span>
+                                {% elif job.status == 'PROCESSING' %}
+                                <span class="badge bg-primary">RUNNING</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ job.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="small text-muted">{{ job.created_at|date:"M d, H:i" }}</td>
+                            <td>
+                                {% if job.status == 'COMPLETED' %}
+                                <a href="{% url 'hub:export_download' job.id %}" class="btn btn-sm btn-outline-primary py-0 px-2 fw-semibold">
+                                    <i class="bi bi-download me-1"></i> Download
+                                </a>
+                                {% else %}
+                                <span class="small text-muted">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="text-center py-4 text-muted">
+                                No exports requested yet.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

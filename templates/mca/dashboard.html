@@ -1,0 +1,205 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}MCA Dashboard - Unified Data Hub{% endblock %}
+
+{% block content %}
+{% include 'mca/navbar.html' with mca_active_section='dashboard' %}
+
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">MCA Operations & Master Registry</h4>
+        <p class="text-muted small mb-0">Authoritative Company & LLP Master &bull; Relational Director Profiles &bull; Ingestion Metrics</p>
+    </div>
+</div>
+
+<!-- Primary MCA KPI Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="card card-custom p-3 shadow-sm h-100 border-start border-4 border-primary">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold text-uppercase">Total MCA Entities</span>
+                <div class="rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center" style="width: 36px; height: 36px;">
+                    <i class="bi bi-buildings"></i>
+                </div>
+            </div>
+            <div class="fs-3 fw-bold text-dark">{{ total_entities }}</div>
+            <div class="small text-muted mt-1">
+                <span class="fw-semibold text-primary">{{ total_companies }}</span> Companies &bull; <span class="fw-semibold text-secondary">{{ total_llps }}</span> LLPs
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="card card-custom p-3 shadow-sm h-100 border-start border-4 border-success">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold text-uppercase">Linked Directors / People</span>
+                <div class="rounded-circle bg-success-subtle text-success d-flex align-items-center justify-content-center" style="width: 36px; height: 36px;">
+                    <i class="bi bi-people"></i>
+                </div>
+            </div>
+            <div class="fs-3 fw-bold text-dark">{{ total_directors }}</div>
+            <div class="small text-muted mt-1">
+                <span class="text-success fw-semibold"><i class="bi bi-check-circle me-1"></i>{{ mca_valid_phones }}</span> Valid Phones
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="card card-custom p-3 shadow-sm h-100 border-start border-4 border-warning">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold text-uppercase">Phone Cleaning Status</span>
+                <div class="rounded-circle bg-warning-subtle text-warning d-flex align-items-center justify-content-center" style="width: 36px; height: 36px;">
+                    <i class="bi bi-telephone"></i>
+                </div>
+            </div>
+            <div class="fs-3 fw-bold text-dark">{{ mca_valid_phones }}</div>
+            <div class="small text-muted mt-1">
+                <span class="text-danger fw-semibold">{{ mca_flagged_phones }}</span> Flagged &bull; <span class="text-secondary">{{ mca_blank_phones }}</span> Blank
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="card card-custom p-3 shadow-sm h-100 border-start border-4 border-danger">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold text-uppercase">Quality Exceptions</span>
+                <div class="rounded-circle bg-danger-subtle text-danger d-flex align-items-center justify-content-center" style="width: 36px; height: 36px;">
+                    <i class="bi bi-shield-exclamation"></i>
+                </div>
+            </div>
+            <div class="fs-3 fw-bold text-dark">{{ open_mca_issues }}</div>
+            <div class="small text-muted mt-1">
+                <a href="{% url 'hub:mca_cleaning' %}" class="text-danger fw-semibold text-decoration-none">
+                    Review Exceptions <i class="bi bi-arrow-right"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- Top States & Jurisdictions -->
+    <div class="col-lg-6">
+        <div class="card card-custom shadow-sm h-100">
+            <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between">
+                <h6 class="fw-bold mb-0"><i class="bi bi-geo-alt text-primary me-2"></i>Top Registered States</h6>
+                <span class="badge bg-light text-dark border">Geographical Master</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>State</th>
+                                <th class="text-end">Registered Entities</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for st in top_states %}
+                            <tr>
+                                <td class="fw-semibold">{{ st.state }}</td>
+                                <td class="text-end"><span class="badge bg-primary-subtle text-primary font-monospace fs-7">{{ st.total }}</span></td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="2" class="text-center text-muted py-4">No state records available</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Top RoCs -->
+    <div class="col-lg-6">
+        <div class="card card-custom shadow-sm h-100">
+            <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between">
+                <h6 class="fw-bold mb-0"><i class="bi bi-building-check text-primary me-2"></i>Registrar of Companies (RoC) Distribution</h6>
+                <span class="badge bg-light text-dark border">Jurisdictions</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>RoC Office</th>
+                                <th class="text-end">Entity Count</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rc in top_rocs %}
+                            <tr>
+                                <td class="fw-semibold">{{ rc.roc }}</td>
+                                <td class="text-end"><span class="badge bg-secondary-subtle text-secondary font-monospace fs-7">{{ rc.total }}</span></td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="2" class="text-center text-muted py-4">No RoC records available</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recently Registered / Staged MCA Companies -->
+<div class="card card-custom shadow-sm mb-4">
+    <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-clock-history text-primary fs-5"></i>
+            <h6 class="fw-bold mb-0">Recently Updated MCA Entities</h6>
+        </div>
+        <a href="{% url 'hub:mca_list' %}" class="btn btn-sm btn-outline-primary fw-semibold">View All Companies &raquo;</a>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Entity Identifier</th>
+                        <th>Type</th>
+                        <th>Company Name</th>
+                        <th>State</th>
+                        <th>Date of Incorp</th>
+                        <th>Directors</th>
+                        <th class="text-end">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for comp in recent_companies %}
+                    <tr>
+                        <td class="font-monospace fw-semibold">{{ comp.entity_id }}</td>
+                        <td>
+                            <span class="badge {% if comp.entity_type == 'company' %}badge-company{% else %}badge-llp{% endif %}">
+                                {{ comp.entity_type|upper }}
+                            </span>
+                        </td>
+                        <td class="fw-semibold">{{ comp.name }}</td>
+                        <td>{{ comp.state|default:"-" }}</td>
+                        <td>{{ comp.date_of_incorporation|date:"d M Y"|default:"-" }}</td>
+                        <td>
+                            <span class="badge bg-light text-dark border px-2 py-1">
+                                <i class="bi bi-people me-1 text-primary"></i>{{ comp.directors.all|length }}
+                            </span>
+                        </td>
+                        <td class="text-end">
+                            <a href="{% url 'hub:mca_detail' comp.id %}" class="btn btn-sm btn-outline-secondary">View Profile</a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted py-4">No MCA records found in database</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

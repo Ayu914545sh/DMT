@@ -1,0 +1,355 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}Column Mapping - Import Center{% endblock %}
+
+{% block extra_head %}
+<style>
+    .mapping-card {
+        border-radius: 12px;
+        transition: all 0.2s ease;
+    }
+    .field-status-badge {
+        font-size: 0.75rem;
+        padding: 0.35rem 0.65rem;
+        border-radius: 6px;
+    }
+    .sample-pill {
+        display: inline-block;
+        background: #f1f5f9;
+        color: #475569;
+        font-size: 0.75rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        margin-right: 0.35rem;
+        margin-bottom: 0.25rem;
+        max-width: 220px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .mapping-search-input {
+        background-color: #fff;
+        border-color: #cbd5e1;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0" style="max-width: 1100px;">
+    <!-- Stepper Navigation -->
+    <div class="stepper-nav">
+        <div class="stepper-step completed">
+            <span class="stepper-circle"><i class="bi bi-check"></i></span>
+            <span>Upload File</span>
+        </div>
+        <div class="stepper-step active">
+            <span class="stepper-circle">2</span>
+            <span>Column Mapping</span>
+        </div>
+        <div class="stepper-step">
+            <span class="stepper-circle">3</span>
+            <span>Preview & Validation</span>
+        </div>
+        <div class="stepper-step">
+            <span class="stepper-circle">4</span>
+            <span>Publish to DB</span>
+        </div>
+    </div>
+
+    <!-- Batch Summary Banner -->
+    <div class="card card-custom p-3 mb-4 bg-light">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+                <span class="badge {% if batch.dataset_type == 'MCA' %}badge-company{% else %}bg-primary-subtle text-primary border{% endif %} me-2">
+                    {{ batch.dataset_type }} Target
+                </span>
+                <strong>{{ batch.file_name }}</strong>
+                <span class="text-muted small ms-2">({{ batch.file_format }}{% if batch.sheet_name %}, Sheet: {{ batch.sheet_name }}{% endif %})</span>
+                {% if available_sheets and available_sheets|length > 1 %}
+                <form method="post" class="d-inline-flex align-items-center gap-1 ms-2">
+                    {% csrf_token %}
+                    <span class="text-muted small fw-semibold">Sheet:</span>
+                    <select name="switch_sheet" class="form-select form-select-sm py-0" style="width: auto; font-size: 0.8rem;" onchange="this.form.submit();">
+                        {% for s in available_sheets %}
+                        <option value="{{ s }}" {% if batch.sheet_name == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% endif %}
+            </div>
+            <div class="d-flex align-items-center gap-3">
+                <span class="small text-muted font-monospace">Batch: {{ batch.batch_id }}</span>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="resetMappingBtn" title="Reset all mappings to blank">
+                    <i class="bi bi-arrow-counterclockwise me-1"></i> Reset Mapping
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {% if batch.dataset_type != detected_type and batch.status != 'COMPLETED' %}
+    <div class="alert alert-warning d-flex align-items-center mb-4 shadow-sm border-warning">
+        <i class="bi bi-exclamation-triangle-fill fs-4 me-3 text-warning"></i>
+        <div>
+            <strong class="d-block text-dark">Dataset Schema Mismatch Detected!</strong>
+            <span class="text-dark">You selected <strong>{{ batch.dataset_type }}</strong>, but the file headers look like <strong>{{ detected_type }}</strong> data.</span>
+            <form method="post" class="d-inline mt-2 d-block">
+                {% csrf_token %}
+                <button type="submit" name="correct_dataset" value="1" class="btn btn-sm btn-warning fw-bold text-dark mt-2 shadow-sm">
+                    <i class="bi bi-arrow-repeat me-1"></i> Correct Dataset Target to {{ detected_type }}
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Reusable Template Selector -->
+    {% if templates %}
+    <div class="card card-custom p-3 mb-4 shadow-sm bg-white">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-bookmark-star text-primary fs-5"></i>
+                <span class="fw-semibold small">Use Saved Mapping Template:</span>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <select id="templateSelector" class="form-select form-select-sm" style="min-width: 240px;">
+                    <option value="">-- Choose Template --</option>
+                    {% for tmpl in templates %}
+                    <option value="{{ tmpl.id }}">{{ tmpl.name }} (Saved {{ tmpl.created_at|date:"M d, Y" }})</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn btn-sm btn-primary" id="applyTemplateBtn">
+                    <i class="bi bi-check-lg me-1"></i> Apply
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Mapping Form -->
+    <form method="post" id="mappingForm">
+        {% csrf_token %}
+        <div class="card card-custom mb-4 shadow-sm overflow-hidden">
+            <div class="card-header-custom d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                    <h6 class="fw-bold mb-0">Review & Adjust Column Mappings</h6>
+                    <small class="text-muted">Map your source headers to target database fields. Unmapped fields are safely preserved in JSON.</small>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    {% if batch.dataset_type == 'MCA' %}
+                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle small"><i class="bi bi-asterisk me-1"></i>Required: entityId (CIN/LLPIN)</span>
+                    {% else %}
+                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle small"><i class="bi bi-asterisk me-1"></i>Required: gstin / gst_number</span>
+                    {% endif %}
+                    <div class="input-group input-group-sm" style="max-width: 220px;">
+                        <span class="input-group-text bg-white border-end-0"><i class="bi bi-funnel text-muted"></i></span>
+                        <input type="text" id="filterHeadersInput" class="form-control border-start-0" placeholder="Filter headers...">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Table Header -->
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" id="mappingTable">
+                    <thead class="table-light text-uppercase fs-8 text-secondary">
+                        <tr>
+                            <th style="width: 32%;">Source Column & Samples</th>
+                            <th style="width: 4%;" class="text-center"></th>
+                            <th style="width: 44%;">Target Database Field</th>
+                            <th style="width: 20%;" class="text-center">Mapping Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for header in headers %}
+                        {% with cur_mapped=suggested_mapping|dictsort:header|default:suggested_mapping|get_item:header %}
+                        <tr class="header-mapping-row" data-header="{{ header|lower }}">
+                            <td>
+                                <div class="font-monospace fw-bold text-dark mb-1">{{ header }}</div>
+                                <div class="samples-container">
+                                    {% with samples_list=column_samples|get_item:header %}
+                                        {% if samples_list %}
+                                            {% for sample in samples_list %}
+                                                <span class="sample-pill" title="{{ sample }}">{{ sample }}</span>
+                                            {% endfor %}
+                                        {% else %}
+                                            <span class="text-muted fst-italic small">No non-empty samples</span>
+                                        {% endif %}
+                                    {% endwith %}
+                                </div>
+                            </td>
+                            <td class="text-center text-muted">
+                                <i class="bi bi-arrow-right text-primary"></i>
+                            </td>
+                            <td>
+                                <div class="d-flex flex-column gap-1">
+                                    <select name="map_{{ header }}" class="form-select form-select-sm mapping-select" data-source="{{ header }}" id="select_map_{{ forloop.counter }}">
+                                        <option value="">-- Preserve in Extra JSON (Unmapped) --</option>
+                                        {% for canonical_field in canonical_schema.keys %}
+                                        <option value="{{ canonical_field }}" {% if cur_mapped == canonical_field %}selected{% endif %}>
+                                            {% if canonical_field == 'gst_number' %}gstin / gst_number * (Required)
+                                            {% elif canonical_field == 'entityId' %}entityId (CIN/LLPIN) * (Required)
+                                            {% elif canonical_field == 'mobile' %}mobile_number / mobile
+                                            {% elif canonical_field == 'Pincode' %}pincode / Pincode
+                                            {% elif canonical_field == 'directorMobile' %}directorMobile / mobile
+                                            {% else %}{{ canonical_field }}{% endif %}
+                                        </option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </td>
+                            <td class="text-center status-col">
+                                {% if cur_mapped == 'entityId' or cur_mapped == 'gst_number' %}
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle field-status-badge">
+                                        <i class="bi bi-check-circle-fill me-1"></i>Required Mapped
+                                    </span>
+                                {% elif cur_mapped %}
+                                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle field-status-badge">
+                                        <i class="bi bi-check2 me-1"></i>Mapped
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-light text-secondary border field-status-badge">
+                                        <i class="bi bi-dash-circle me-1"></i>Unmapped (JSON)
+                                    </span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endwith %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Date Format & Reusable Template Options -->
+        <div class="card card-custom p-4 mb-4 shadow-sm bg-white">
+            <h6 class="fw-bold mb-3"><i class="bi bi-calendar-check me-2 text-primary"></i>Date Format & Reusable Templates</h6>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Source Date Pattern</label>
+                    <select name="date_format" class="form-select">
+                        <option value="%m/%d/%Y" {% if date_format == '%m/%d/%Y' %}selected{% endif %}>MM/DD/YYYY (e.g. 09/24/2026 - MCA Standard)</option>
+                        <option value="%Y-%m-%d" {% if date_format == '%Y-%m-%d' %}selected{% endif %}>YYYY-MM-DD (e.g. 2026-09-25 - GST Standard)</option>
+                        <option value="%d/%m/%Y" {% if date_format == '%d/%m/%Y' %}selected{% endif %}>DD/MM/YYYY (e.g. 24/09/2026)</option>
+                        <option value="%d-%m-%Y" {% if date_format == '%d-%m-%Y' %}selected{% endif %}>DD-MM-YYYY (e.g. 24-09-2026)</option>
+                    </select>
+                    <small class="text-muted d-block mt-1">Specify date structure to prevent ambiguous month/day swapping.</small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Save as Reusable Mapping Template</label>
+                    <input type="text" name="template_name" class="form-control" placeholder="Optional template name (e.g. MCA Standard Feed)">
+                    <small class="text-muted d-block mt-1">Saves this mapping configuration for future re-imports.</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex align-items-center justify-content-between mb-5">
+            <a href="{% url 'hub:import_upload' %}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left me-1"></i> Back to Upload
+            </a>
+            <button type="submit" class="btn btn-primary fw-semibold px-4 shadow-sm" id="submitMappingBtn">
+                Stage & Preview Data <i class="bi bi-arrow-right ms-1"></i>
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const requiredTarget = "{% if batch.dataset_type == 'MCA' %}entityId{% else %}gst_number{% endif %}";
+    const mappingSelects = document.querySelectorAll('.mapping-select');
+    const filterInput = document.getElementById('filterHeadersInput');
+    const rows = document.querySelectorAll('.header-mapping-row');
+    const resetBtn = document.getElementById('resetMappingBtn');
+    const templateSelector = document.getElementById('templateSelector');
+    const applyTemplateBtn = document.getElementById('applyTemplateBtn');
+
+    // Dynamic search filter across headers, mapped fields, and sample values
+    if (filterInput) {
+        filterInput.addEventListener('input', function() {
+            const query = this.value.trim().toLowerCase();
+            rows.forEach(row => {
+                const headerText = (row.getAttribute('data-header') || '').toLowerCase();
+                const selectVal = (row.querySelector('.mapping-select')?.value || '').toLowerCase();
+                const samplesText = (row.querySelector('.samples-container')?.textContent || '').toLowerCase();
+                if (!query || headerText.includes(query) || selectVal.includes(query) || samplesText.includes(query)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
+    }
+
+    // Update status badge on selection change
+    function updateRowBadge(select) {
+        const tr = select.closest('tr');
+        const statusCol = tr.querySelector('.status-col');
+        const val = select.value;
+
+        if (val === requiredTarget || (requiredTarget === 'gst_number' && (val === 'gstin' || val === 'gst_number')) || (requiredTarget === 'entityId' && (val === 'cin' || val === 'entityId'))) {
+            statusCol.innerHTML = '<span class="badge bg-success-subtle text-success border border-success-subtle field-status-badge"><i class="bi bi-check-circle-fill me-1"></i>Required Mapped</span>';
+        } else if (val) {
+            statusCol.innerHTML = '<span class="badge bg-primary-subtle text-primary border border-primary-subtle field-status-badge"><i class="bi bi-check2 me-1"></i>Mapped</span>';
+        } else {
+            statusCol.innerHTML = '<span class="badge bg-light text-secondary border field-status-badge"><i class="bi bi-dash-circle me-1"></i>Unmapped (JSON)</span>';
+        }
+    }
+
+    mappingSelects.forEach(select => {
+        select.addEventListener('change', function() {
+            updateRowBadge(this);
+            validateDuplicates();
+        });
+    });
+
+    // Prevent duplicate target mapping in client-side UI
+    function validateDuplicates() {
+        const counts = {};
+        mappingSelects.forEach(sel => {
+            const val = sel.value;
+            if (val) {
+                counts[val] = (counts[val] || 0) + 1;
+            }
+        });
+
+        mappingSelects.forEach(sel => {
+            const val = sel.value;
+            if (val && counts[val] > 1) {
+                sel.classList.add('is-invalid');
+                sel.title = 'Duplicate mapping: target field is mapped more than once!';
+            } else {
+                sel.classList.remove('is-invalid');
+                sel.title = '';
+            }
+        });
+    }
+
+    validateDuplicates();
+
+    // Reset Mapping button
+    if (resetBtn) {
+        resetBtn.addEventListener('click', function() {
+            if (confirm('Clear all mappings? Columns will default to unmapped (saved in extra JSON).')) {
+                mappingSelects.forEach(sel => {
+                    sel.value = '';
+                    updateRowBadge(sel);
+                });
+                validateDuplicates();
+            }
+        });
+    }
+
+    // Apply template button
+    if (applyTemplateBtn && templateSelector) {
+        applyTemplateBtn.addEventListener('click', function() {
+            const tmplId = templateSelector.value;
+            if (!tmplId) {
+                alert('Please select a mapping template first.');
+                return;
+            }
+            window.location.href = "{% url 'hub:import_map' batch.batch_id %}?use_template=" + encodeURIComponent(tmplId);
+        });
+    }
+});
+</script>
+{% endblock %}

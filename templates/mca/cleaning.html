@@ -1,0 +1,154 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}MCA Data Cleaning & Quality Inbox - Unified Data Hub{% endblock %}
+
+{% block content %}
+{% include 'mca/navbar.html' with mca_active_section='cleaning' %}
+
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">MCA Data Cleaning & Exception Inbox</h4>
+        <p class="text-muted small mb-0">Flagged contact numbers, format violations, and anomalous director details for MCA records.</p>
+    </div>
+</div>
+
+<!-- Filters Bar -->
+<div class="card card-custom p-3 mb-4 shadow-sm">
+    <form method="get" class="row g-2 align-items-center">
+        <div class="col-12 col-md-4">
+            <select name="status" class="form-select form-select-sm">
+                <option value="open" {% if status == 'open' %}selected{% endif %}>Open Exceptions (Unresolved)</option>
+                <option value="resolved" {% if status == 'resolved' %}selected{% endif %}>Resolved Exceptions</option>
+                <option value="all" {% if status == 'all' %}selected{% endif %}>All MCA Exceptions</option>
+            </select>
+        </div>
+        <div class="col-12 col-md-5">
+            <select name="error_code" class="form-select form-select-sm">
+                <option value="">All Reason Codes</option>
+                {% for ec in error_codes %}
+                <option value="{{ ec }}" {% if error_code == ec %}selected{% endif %}>{{ ec }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-3">
+            <button type="submit" class="btn btn-primary btn-sm w-100 fw-semibold">
+                <i class="bi bi-funnel me-1"></i>Filter Exceptions
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- Issues Table -->
+<div class="card card-custom shadow-sm overflow-hidden mb-4">
+    <div class="table-responsive">
+        <table class="table table-custom align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Issue ID</th>
+                    <th>Entity Identifier</th>
+                    <th>Target Field</th>
+                    <th>Reason Code</th>
+                    <th>Raw Value Observed</th>
+                    <th>State</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for issue in page_obj %}
+                <tr>
+                    <td class="font-monospace fw-semibold">#{{ issue.id }}</td>
+                    <td>
+                        <span class="font-monospace fw-bold">{{ issue.entity_identifier }}</span>
+                        <small class="text-muted d-block">{{ issue.record_type }}</small>
+                    </td>
+                    <td><code>{{ issue.field_name }}</code></td>
+                    <td>
+                        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">{{ issue.error_code }}</span>
+                    </td>
+                    <td>
+                        <code class="text-danger bg-light px-2 py-1 rounded small">{{ issue.raw_value|truncatechars:35|default:"[BLANK]" }}</code>
+                    </td>
+                    <td>
+                        {% if issue.is_resolved %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle">RESOLVED</span>
+                        {% else %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">OPEN</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not issue.is_resolved %}
+                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#resolveModal-{{ issue.id }}">
+                            Resolve
+                        </button>
+
+                        <!-- Modal Resolve -->
+                        <div class="modal fade" id="resolveModal-{{ issue.id }}" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog modal-dialog-centered">
+                                <div class="modal-content border-0 shadow">
+                                    <div class="modal-header bg-primary text-white">
+                                        <h6 class="modal-title fw-bold">Resolve Exception #{{ issue.id }}</h6>
+                                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <form action="{% url 'hub:quality_resolve' issue.id %}" method="post">
+                                        {% csrf_token %}
+                                        <div class="modal-body p-4">
+                                            <p class="small text-muted mb-2">Entity: <strong>{{ issue.entity_identifier }}</strong> &bull; Reason: <code>{{ issue.error_code }}</code></p>
+                                            <div class="mb-3">
+                                                <label class="form-label small fw-semibold">Corrected Phone (10 digits, optional)</label>
+                                                <input type="text" class="form-control form-control-sm" name="corrected_phone" placeholder="9876543210">
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label small fw-semibold">Resolution Note</label>
+                                                <textarea class="form-control form-control-sm" name="note" rows="2" placeholder="e.g. Verified with registrar records"></textarea>
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer bg-light-subtle">
+                                            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                                            <button type="submit" class="btn btn-primary btn-sm fw-semibold">Mark Resolved</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <span class="text-muted small">Completed</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" class="text-center py-5 text-muted">
+                        <i class="bi bi-shield-check fs-1 d-block mb-2 text-success"></i>
+                        <span class="fw-semibold">No MCA data quality exceptions found! All contact numbers and dates adhere to validation rules.</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_obj.has_other_pages %}
+    <div class="card-footer bg-white border-top py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <small class="text-muted">Showing {{ page_obj.start_index }} to {{ page_obj.end_index }} of {{ page_obj.paginator.count }} issues</small>
+        <ul class="pagination pagination-sm mb-0">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?{% url_replace page=page_obj.previous_page_number %}">&laquo;</a>
+            </li>
+            {% endif %}
+
+            <li class="page-item active">
+                <span class="page-link">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+            </li>
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?{% url_replace page=page_obj.next_page_number %}">&raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

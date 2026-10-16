@@ -1,0 +1,26 @@
+{
+  "include": [
+    "hub",
+    "dmt_project"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "extraPaths": [
+    "."
+  ],
+  "typeCheckingMode": "basic",
+  "reportAttributeAccessIssue": "none",
+  "reportGeneralTypeIssues": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportFunctionMemberAccess": "none",
+  "reportArgumentType": "none",
+  "reportOperatorIssue": "none",
+  "reportIndexIssue": "none",
+  "reportCallIssue": "none",
+  "reportAssignmentType": "none",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none",
+  "reportMissingModuleSource": "none"
+}

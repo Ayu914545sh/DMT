@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+
+{% block title %}Edit GST {{ gst.gst_number }}{% endblock %}
+
+{% block content %}
+{% include 'gst/navbar.html' %}
+
+<div class="container-fluid px-0" style="max-width: 800px;">
+    <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+        <div>
+            <h4 class="fw-bold mb-1">Edit GST Registration</h4>
+            <p class="text-muted small mb-0">{{ gst.gst_number }} &bull; {{ gst.trade_name|default:gst.legal_name }}</p>
+        </div>
+        <a href="{% url 'hub:gst_detail' gst.id %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left me-1"></i> Back to Detail
+        </a>
+    </div>
+
+    <div class="card card-custom p-4 shadow-sm">
+        <form method="post">
+            {% csrf_token %}
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">GSTIN</label>
+                    {{ form.gst_number }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">PAN</label>
+                    {{ form.pan }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Trade Name</label>
+                    {{ form.trade_name }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Legal Name</label>
+                    {{ form.legal_name }}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">Status Code</label>
+                    {{ form.status }}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">Source Type (type)</label>
+                    {{ form.source_type }}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">GST Type</label>
+                    {{ form.gst_type }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Registration Date</label>
+                    {{ form.registration_date }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Contact Mobile</label>
+                    {{ form.raw_mobile }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Contact Email</label>
+                    {{ form.email }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">PIN Code</label>
+                    {{ form.pincode }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">State</label>
+                    {{ form.state }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">City</label>
+                    {{ form.city }}
+                </div>
+                <div class="col-12">
+                    <label class="form-label small fw-semibold">Nature of Business</label>
+                    {{ form.nature_of_business }}
+                </div>
+                <div class="col-12">
+                    <label class="form-label small fw-semibold">Address</label>
+                    {{ form.address }}
+                </div>
+                <div class="col-12">
+                    <div class="form-check">
+                        {{ form.is_archived }}
+                        <label class="form-check-label small fw-semibold" for="{{ form.is_archived.id_for_label }}">
+                            Archive Record (Hide from active search)
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
+                <a href="{% url 'hub:gst_detail' gst.id %}" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-primary fw-semibold px-4 shadow-sm">
+                    Save Changes
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

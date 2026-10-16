@@ -1,0 +1,305 @@
+{% load hub_tags %}
+<tbody id="mcaTableBody">
+    {% for company in page_obj %}
+    <tr id="mca-row-{{ company.id }}">
+        <td class="font-monospace fw-semibold">
+            <div class="d-inline-flex align-items-center gap-2">
+                <button type="button" 
+                        class="btn-row-toggle" 
+                        data-bs-toggle="collapse" 
+                        data-bs-target="#mca-detail-{{ company.id }}" 
+                        aria-expanded="false" 
+                        aria-controls="mca-detail-{{ company.id }}" 
+                        aria-label="Expand entity details" 
+                        title="Expand entity details">
+                    <i class="bi bi-chevron-down toggle-icon"></i>
+                </button>
+                <span class="user-select-all">{{ company.entity_id }}</span>
+            </div>
+        </td>
+        <td>
+            {% if company.entity_type == 'company' %}
+            <span class="badge badge-company">COMPANY</span>
+            {% else %}
+            <span class="badge badge-llp">LLP</span>
+            {% endif %}
+        </td>
+        <td>
+            <div class="fw-bold text-dark text-truncate" style="max-width: 250px;" title="{{ company.name }}">{{ company.name }}</div>
+            <small class="text-muted text-truncate d-block" style="max-width: 250px;">{{ company.email|default:"No email" }}</small>
+        </td>
+        <td>
+            <div class="text-truncate" style="max-width: 140px;" title="{{ company.state }}">{{ company.state|default:"-" }}</div>
+        </td>
+        <td>
+            <div class="text-truncate" style="max-width: 130px;" title="{{ company.city }}">{{ company.city|default:"-" }}</div>
+        </td>
+        <td>
+            <small class="text-muted text-truncate d-block" style="max-width: 120px;" title="{{ company.roc }}">{{ company.roc|default:"-" }}</small>
+        </td>
+        <td>
+            <div class="small font-monospace text-truncate user-select-all" style="max-width: 160px;" title="{{ company.email }}">
+                {{ company.email|default:"-" }}
+            </div>
+            {% if company.paid_up_capital %}
+            <small class="text-success font-monospace">₹{{ company.paid_up_capital|floatformat:0 }}</small>
+            {% endif %}
+        </td>
+        <td>
+            <span class="badge bg-light text-dark border px-2 py-1 fw-bold">
+                <i class="bi bi-people me-1 text-primary"></i>{{ company.directors.all|length }}
+            </span>
+            {% with first_dir=company.directors.all|first %}
+            {% if first_dir %}
+            <small class="text-muted d-block text-truncate" style="max-width: 150px;" title="{{ first_dir.director_name }}">{{ first_dir.director_name }}</small>
+            {% endif %}
+            {% endwith %}
+        </td>
+        <td class="text-end">
+            <div class="btn-group btn-group-sm">
+                <a href="{% url 'hub:mca_detail' company.id %}" class="btn btn-outline-secondary" title="View Full Profile">
+                    <i class="bi bi-eye"></i>
+                </a>
+                <a href="{% url 'hub:mca_edit' company.id %}" class="btn btn-outline-secondary" title="Edit Company Details">
+                    <i class="bi bi-pencil"></i>
+                </a>
+                {% if request.user.is_superuser %}
+                <button type="button" 
+                        class="btn btn-outline-danger btn-delete-record" 
+                        data-record-id="{{ company.id }}"
+                        data-record-name="{{ company.name }}"
+                        data-record-identifier="{{ company.entity_id }}"
+                        data-module-type="MCA"
+                        data-delete-url="{% url 'hub:mca_delete' company.id %}"
+                        title="Delete record" 
+                        aria-label="Delete record">
+                    <i class="bi bi-trash"></i>
+                </button>
+                {% endif %}
+            </div>
+        </td>
+    </tr>
+    <!-- Inline Expandable Detail Row -->
+    <tr class="entity-detail-row" id="mca-detail-row-{{ company.id }}">
+        <td colspan="9">
+            <div class="collapse entity-detail-collapse" id="mca-detail-{{ company.id }}">
+                <div class="entity-detail-container">
+                    <!-- Top Bar with Title & Quick Info -->
+                    <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom flex-wrap gap-2">
+                        <div class="d-flex align-items-center gap-2">
+                            <i class="bi bi-building text-primary fs-5"></i>
+                            <span class="fw-bold text-dark fs-6">{{ company.name }}</span>
+                            <span class="badge {% if company.entity_type == 'company' %}badge-company{% else %}badge-llp{% endif %}">{{ company.entity_type|upper }}</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <a href="{% url 'hub:mca_director_add' company.id %}" class="btn btn-sm btn-outline-primary fw-semibold">
+                                <i class="bi bi-person-plus-fill me-1"></i> Add Person
+                            </a>
+                            <a href="{% url 'hub:mca_edit' company.id %}" class="btn btn-sm btn-outline-secondary fw-semibold">
+                                <i class="bi bi-pencil me-1"></i> Edit Entity
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Key Entity Fields Grid -->
+                    <div class="row g-2 mb-3">
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Entity Identifier</div>
+                                <div class="field-value font-monospace user-select-all">{{ company.entity_id }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Entity Type</div>
+                                <div class="field-value text-capitalize">{{ company.get_entity_type_display|default:company.entity_type|upper }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Company Name</div>
+                                <div class="field-value user-select-all">{{ company.name }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Class of Company</div>
+                                <div class="field-value">{{ company.class_of_company|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Date of Incorporation</div>
+                                <div class="field-value">{{ company.date_of_incorporation|date:"d M Y"|default:"Not recorded" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">ROC</div>
+                                <div class="field-value">{{ company.roc|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Paid-Up Capital</div>
+                                <div class="field-value text-success font-monospace">
+                                    {% if company.paid_up_capital %}₹{{ company.paid_up_capital|floatformat:2 }}{% else %}-{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Authorized Capital</div>
+                                <div class="field-value font-monospace">
+                                    {% if company.authorized_capital %}₹{{ company.authorized_capital|floatformat:2 }}{% else %}-{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">NIC Code</div>
+                                <div class="field-value font-monospace">{{ company.nic_code|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">NIC Label</div>
+                                <div class="field-value small">{{ company.nic_label|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Company Email</div>
+                                <div class="field-value font-monospace text-truncate user-select-all">{{ company.email|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Upload Date</div>
+                                <div class="field-value small font-monospace">{{ company.source_upload_date|date:"Y-m-d H:i:s"|default:"Not recorded" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">State</div>
+                                <div class="field-value">{{ company.state|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">District</div>
+                                <div class="field-value">{{ company.district|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">City</div>
+                                <div class="field-value">{{ company.city|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-lg-9">
+                            <div class="entity-field-card">
+                                <div class="field-label">Registered Address</div>
+                                <div class="field-value small user-select-all">{{ company.registered_address|default:"No address recorded" }}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Related Director Details Subtable -->
+                    <div class="card border rounded shadow-none overflow-hidden bg-white">
+                        <div class="card-header bg-light py-2 px-3 d-flex align-items-center justify-content-between border-bottom">
+                            <div class="d-flex align-items-center gap-2">
+                                <i class="bi bi-people-fill text-primary"></i>
+                                <span class="fw-bold small text-dark">Related Director Details ({{ company.directors.all|length }})</span>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-custom align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th class="ps-3">Director Name</th>
+                                        <th>Director Email</th>
+                                        <th>Director Mobile</th>
+                                        <th>Cleaned Mobile Number</th>
+                                        <th class="pe-3">Mobile Validation Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for person in company.directors.all %}
+                                    <tr>
+                                        <td class="ps-3">
+                                            <strong class="text-dark">{{ person.director_name }}</strong>
+                                            {% if person.designation and person.designation != 'Unknown' %}
+                                            <span class="badge bg-light text-secondary border ms-1" style="font-size: 0.7rem;">{{ person.designation }}</span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="font-monospace small user-select-all">{{ person.director_email|default:"-" }}</td>
+                                        <td class="font-monospace small text-muted user-select-all">{{ person.raw_mobile|default:"-" }}</td>
+                                        <td>
+                                            {% if person.canonical_mobile %}
+                                            <span class="badge badge-valid font-monospace fs-6 user-select-all">
+                                                {{ person.canonical_mobile|format_phone }}
+                                            </span>
+                                            {% else %}
+                                            <span class="badge badge-blank font-monospace">NULL</span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="pe-3">
+                                            {% if person.contact_validity == 'valid' or person.contact_validity == 'VALID' %}
+                                            <span class="badge badge-valid"><i class="bi bi-check-circle me-1"></i>VALID</span>
+                                            {% elif person.contact_validity == 'cleaned' %}
+                                            <span class="badge badge-valid"><i class="bi bi-check2 me-1"></i>CLEANED</span>
+                                            {% elif person.contact_validity == 'multiple_numbers_review' %}
+                                            <span class="badge badge-flagged"><i class="bi bi-question-circle me-1"></i>MULTIPLE REVIEW</span>
+                                            {% elif person.contact_validity == 'invalid' or person.contact_validity == 'FLAGGED' %}
+                                            <span class="badge badge-flagged"><i class="bi bi-exclamation-triangle me-1"></i>FLAGGED</span>
+                                            {% else %}
+                                            <span class="badge badge-blank">BLANK</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% empty %}
+                                    <tr>
+                                        <td colspan="5" class="text-center py-3 text-muted small ps-3 pe-3">
+                                            <i class="bi bi-info-circle me-1"></i>No related directors recorded for this entity.
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </td>
+    </tr>
+    {% empty %}
+    <tr>
+        <td colspan="9" class="text-center py-5 text-muted">
+            <i class="bi bi-search d-block fs-2 text-muted mb-2"></i>
+            <span class="fw-semibold">No matching records found</span>
+            <div class="small text-muted mt-1">Try adjusting your search filters or <button type="button" class="btn btn-link btn-sm p-0 btn-clear-all-filters">clearing all filters</button>.</div>
+        </td>
+    </tr>
+    {% endfor %}
+</tbody>
+
+<!-- Pagination -->
+{% if page_obj.has_other_pages %}
+<div class="p-3 border-top d-flex justify-content-between align-items-center flex-wrap gap-2" id="paginationWrapper">
+    <span class="small text-muted">Showing {{ page_obj.start_index }}-<span id="pageEndIndex">{{ page_obj.end_index }}</span> of <span id="paginationTotalCount">{{ page_obj.paginator.count }}</span> entities</span>
+    <ul class="pagination pagination-sm mb-0">
+        {% if page_obj.has_previous %}
+        <li class="page-item"><a class="page-link ajax-page-link" href="?{% url_replace page=page_obj.previous_page_number %}" data-page="{{ page_obj.previous_page_number }}">Previous</a></li>
+        {% endif %}
+        <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+        {% if page_obj.has_next %}
+        <li class="page-item"><a class="page-link ajax-page-link" href="?{% url_replace page=page_obj.next_page_number %}" data-page="{{ page_obj.next_page_number }}">Next</a></li>
+        {% endif %}
+    </ul>
+</div>
+{% elif total_count > 0 %}
+<div class="p-3 border-top d-flex justify-content-between align-items-center flex-wrap gap-2" id="paginationWrapper">
+    <span class="small text-muted">Showing {{ page_obj.start_index }}-<span id="pageEndIndex">{{ page_obj.end_index }}</span> of <span id="paginationTotalCount">{{ total_count }}</span> entities</span>
+</div>
+{% endif %}

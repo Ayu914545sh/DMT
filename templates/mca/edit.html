@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+
+{% block title %}Edit {{ company.name }} - MCA Company{% endblock %}
+
+{% block content %}
+{% include 'mca/navbar.html' with mca_active_section='companies' %}
+
+<div class="container-fluid px-0" style="max-width: 800px;">
+    <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+        <div>
+            <h4 class="fw-bold mb-1">Edit MCA Entity Details</h4>
+            <p class="text-muted small mb-0">{{ company.name }} &bull; {{ company.entity_id }}</p>
+        </div>
+        <a href="{% url 'hub:mca_detail' company.id %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left me-1"></i> Back to Profile
+        </a>
+    </div>
+
+    <div class="card card-custom p-4 shadow-sm">
+        <form method="post">
+            {% csrf_token %}
+            <div class="row g-3">
+                <div class="col-md-8">
+                    <label class="form-label small fw-semibold">Company / LLP Name</label>
+                    {{ form.name }}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">Entity Type</label>
+                    {{ form.entity_type }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Entity Identifier (CIN/LLPIN)</label>
+                    {{ form.entity_id }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Class of Company</label>
+                    {{ form.class_of_company }}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">State</label>
+                    {{ form.state }}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">District</label>
+                    {{ form.district }}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold">City</label>
+                    {{ form.city }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">ROC</label>
+                    {{ form.roc }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Date of Incorporation</label>
+                    {{ form.date_of_incorporation }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Paid-Up Capital (₹)</label>
+                    {{ form.paid_up_capital }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Authorized Capital (₹)</label>
+                    {{ form.authorized_capital }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">NIC Code</label>
+                    {{ form.nic_code }}
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">Corporate Email</label>
+                    {{ form.email }}
+                </div>
+                <div class="col-12">
+                    <label class="form-label small fw-semibold">NIC Description / Activity</label>
+                    {{ form.nic_label }}
+                </div>
+                <div class="col-12">
+                    <label class="form-label small fw-semibold">Registered Address</label>
+                    {{ form.registered_address }}
+                </div>
+                <div class="col-12">
+                    <div class="form-check">
+                        {{ form.is_archived }}
+                        <label class="form-check-label small fw-semibold" for="{{ form.is_archived.id_for_label }}">
+                            Archive Record (Hide from active search)
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
+                <a href="{% url 'hub:mca_detail' company.id %}" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-primary fw-semibold px-4 shadow-sm">
+                    Save Changes
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

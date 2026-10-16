@@ -1,0 +1,144 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}MCA Directors & People - Unified Data Hub{% endblock %}
+
+{% block content %}
+{% include 'mca/navbar.html' with mca_active_section='directors' %}
+
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">MCA Directors & Key Managerial Personnel</h4>
+        <p class="text-muted small mb-0">Distinct director relationships &bull; Normalized contact phones &bull; <span class="fw-semibold">{{ total_count }}</span> people records</p>
+    </div>
+</div>
+
+<!-- Search & Phone Status Filter Bar -->
+<div class="card card-custom p-3 mb-4 shadow-sm">
+    <form method="get" class="row g-2 align-items-center">
+        <div class="col-12 col-md-6">
+            <div class="input-group input-group-sm">
+                <span class="input-group-text bg-light text-muted"><i class="bi bi-search"></i></span>
+                <input type="text" name="q" class="form-control" placeholder="Search Director Name, Mobile, Email, Company Name, CIN..." value="{{ q }}">
+            </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <select name="phone_status" class="form-select form-select-sm">
+                <option value="">All Phone Statuses</option>
+                <option value="valid" {% if phone_status == 'valid' %}selected{% endif %}>Valid 10-Digit Mobile</option>
+                <option value="cleaned" {% if phone_status == 'cleaned' %}selected{% endif %}>Cleaned & Normalized</option>
+                <option value="invalid" {% if phone_status == 'invalid' %}selected{% endif %}>Invalid Format / Prefix</option>
+                <option value="multiple_numbers_review" {% if phone_status == 'multiple_numbers_review' %}selected{% endif %}>Multiple Numbers (Review)</option>
+                <option value="missing" {% if phone_status == 'missing' %}selected{% endif %}>Missing / Blank</option>
+            </select>
+        </div>
+        <div class="col-12 col-md-2">
+            <button type="submit" class="btn btn-primary btn-sm w-100 fw-semibold">
+                <i class="bi bi-funnel me-1"></i>Filter
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- Directors Master Table -->
+<div class="card card-custom shadow-sm overflow-hidden mb-4">
+    <div class="table-responsive">
+        <table class="table table-custom align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Director Name</th>
+                    <th>Cleaned Mobile</th>
+                    <th>Original / Raw Phone</th>
+                    <th>Phone Status</th>
+                    <th>Director Email</th>
+                    <th>Linked MCA Company</th>
+                    <th>Designation</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for director in page_obj %}
+                <tr>
+                    <td class="fw-bold text-dark">
+                        <i class="bi bi-person-fill text-primary me-1"></i>{{ director.director_name }}
+                    </td>
+                    <td>
+                        {% if director.canonical_mobile %}
+                        <span class="font-monospace fw-semibold text-success">{{ director.canonical_mobile }}</span>
+                        {% else %}
+                        <span class="text-muted small">None</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="font-monospace small text-muted">{{ director.raw_mobile|default:"-" }}</span>
+                    </td>
+                    <td>
+                        {% if director.contact_validity in 'valid,cleaned,VALID' %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle">
+                            <i class="bi bi-check-circle-fill me-1"></i>{{ director.contact_validity|upper }}
+                        </span>
+                        {% elif director.contact_validity in 'invalid,multiple_numbers_review,FLAGGED' %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                            <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ director.contact_validity|upper }}
+                        </span>
+                        {% else %}
+                        <span class="badge bg-secondary-subtle text-secondary border">
+                            {{ director.contact_validity|upper }}
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <small class="text-muted">{{ director.director_email|default:"-" }}</small>
+                    </td>
+                    <td>
+                        <a href="{% url 'hub:mca_detail' director.company.id %}" class="fw-semibold text-primary text-decoration-none text-truncate d-block" style="max-width: 250px;">
+                            {{ director.company.name }}
+                        </a>
+                        <small class="font-monospace text-muted">{{ director.company.entity_id }}</small>
+                    </td>
+                    <td>
+                        <span class="badge bg-light text-dark border">{{ director.designation|default:"Director" }}</span>
+                    </td>
+                    <td class="text-end">
+                        <a href="{% url 'hub:mca_detail' director.company.id %}" class="btn btn-sm btn-outline-secondary" title="View Company Details">
+                            <i class="bi bi-eye"></i>
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" class="text-center py-5 text-muted">
+                        <i class="bi bi-person-x fs-1 d-block mb-2 text-secondary"></i>
+                        <span class="fw-semibold">No director records found matching current criteria.</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <div class="card-footer bg-white border-top py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <small class="text-muted">Showing {{ page_obj.start_index }} to {{ page_obj.end_index }} of {{ page_obj.paginator.count }} directors</small>
+        <ul class="pagination pagination-sm mb-0">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?{% url_replace page=page_obj.previous_page_number %}">&laquo;</a>
+            </li>
+            {% endif %}
+
+            <li class="page-item active">
+                <span class="page-link">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+            </li>
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?{% url_replace page=page_obj.next_page_number %}">&raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

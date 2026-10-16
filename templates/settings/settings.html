@@ -1,0 +1,392 @@
+{% extends 'base.html' %}
+
+{% block title %}Settings & Policies - Unified Data Hub{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">System Settings & Data Policies</h4>
+        <p class="text-muted small mb-0">Configure phone normalization policies, inspect database status, and manage mapping templates.</p>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- Policy Configuration Card -->
+    <div class="col-lg-6">
+        <div class="card card-custom p-4 shadow-sm h-100">
+            <h6 class="fw-bold mb-3"><i class="bi bi-shield-check me-2 text-primary"></i>Ingestion Validation Policies</h6>
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" type="checkbox" name="strict_phone" id="strictPhoneSwitch" {% if strict_phone %}checked{% endif %}>
+                    <label class="form-check-label fw-semibold" for="strictPhoneSwitch">
+                        Enforce Strict Domestic Mobile Prefix (6, 7, 8, 9)
+                    </label>
+                    <small class="text-muted d-block mt-1">
+                        When enabled, 10-digit candidates that do not begin with digits 6–9 are flagged with reason code <code>INVALID_DOMESTIC_PREFIX</code> and stored as NULL in canonical mobile.
+                    </small>
+                </div>
+
+                <div class="alert alert-light border p-3 small text-muted mb-4">
+                    <strong>Standard Cleaning Rules (Always Active):</strong>
+                    <ul class="mb-0 ps-3 mt-1">
+                        <li>Canonical mobile field contains strictly 10 ASCII digits or NULL.</li>
+                        <li>Strips leading backticks (<code>`</code>), quotes, and apostrophes.</li>
+                        <li>Recognizes <code>+91</code>, <code>0091</code>, bare <code>91</code> (12 digits only), and domestic <code>0</code> (11 digits only).</li>
+                        <li>Never strips 91 from an already valid 10-digit number.</li>
+                        <li>Never takes the last 10 digits of arbitrary input.</li>
+                    </ul>
+                </div>
+
+                {% if request.user.is_superuser %}
+                <button type="submit" class="btn btn-primary btn-sm fw-semibold shadow-sm">
+                    Update Validation Policy
+                </button>
+                {% else %}
+                <div class="small text-muted fst-italic">Requires administrator privileges to update system policies.</div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+
+    <!-- Infrastructure Status Card -->
+    <div class="col-lg-6">
+        <div class="card card-custom p-4 shadow-sm h-100">
+            <h6 class="fw-bold mb-3"><i class="bi bi-cpu me-2 text-primary"></i>System Health & Infrastructure</h6>
+            <div class="list-group list-group-flush small">
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Database Engine</span>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle fw-bold">PostgreSQL 18 (psycopg 3)</span>
+                </div>
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Django Version</span>
+                    <span class="fw-bold font-monospace">Django 5.2 LTS</span>
+                </div>
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Python Runtime</span>
+                    <span class="fw-bold font-monospace">Python 3.13</span>
+                </div>
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Background Task Queue</span>
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle">Celery + Redis / Synchronous Fallback</span>
+                </div>
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Static Assets Engine</span>
+                    <span class="badge bg-light text-dark border">WhiteNoise Compressed Manifest</span>
+                </div>
+                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                    <span class="text-muted">Production Web Server</span>
+                    <span class="badge bg-light text-dark border">Gunicorn + Nginx (Docker Compose Ready)</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Saved Mapping Templates Card -->
+<div class="card card-custom shadow-sm overflow-hidden mb-4">
+    <div class="card-header-custom">
+        <h6 class="fw-bold mb-0"><i class="bi bi-bookmark-check me-2 text-primary"></i>Saved Column Mapping Templates</h6>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-custom align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Template Name</th>
+                    <th>Target Dataset</th>
+                    <th>Date Pattern</th>
+                    <th>Delimiter</th>
+                    <th>Created By</th>
+                    <th>Last Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in templates %}
+                <tr>
+                    <td class="fw-bold text-dark">{{ t.name }}</td>
+                    <td>
+                        <span class="badge {% if t.dataset_type == 'MCA' %}badge-company{% else %}bg-primary-subtle text-primary border{% endif %}">
+                            {{ t.dataset_type }}
+                        </span>
+                    </td>
+                    <td class="font-monospace small">{{ t.date_format }}</td>
+                    <td class="font-monospace small">"{{ t.delimiter }}"</td>
+                    <td>{{ t.created_by.username|default:"System" }}</td>
+                    <td class="text-muted small">{{ t.updated_at|date:"M d, Y" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="text-center py-4 text-muted">
+                        No saved mapping templates yet. Save a template during any file import!
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if request.user.is_superuser %}
+<!-- Admin Security: Change Password Card -->
+<div class="card card-custom shadow-sm mb-4 border-start border-4 border-primary" id="changePasswordSection">
+    <div class="card-header-custom d-flex align-items-center justify-content-between">
+        <div>
+            <h6 class="fw-bold mb-0"><i class="bi bi-key-fill me-2 text-primary"></i>Admin Security & Credentials</h6>
+            <small class="text-muted">Update your administrator account password. Changes require immediate re-authentication.</small>
+        </div>
+        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">
+            <i class="bi bi-shield-lock me-1"></i>Administrator Only
+        </span>
+    </div>
+    <div class="card-body p-4">
+        {% if password_form.non_field_errors %}
+        <div class="alert alert-danger py-2 px-3 small mb-3">
+            {% for err in password_form.non_field_errors %}
+            <div><i class="bi bi-exclamation-circle me-1"></i>{{ err }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <form method="post" action="{% url 'hub:admin_change_password' %}" id="adminChangePasswordForm" novalidate>
+            {% csrf_token %}
+            <div class="row g-3">
+                <!-- Current Password -->
+                <div class="col-12 col-md-4">
+                    <label class="form-label fw-semibold small mb-1" for="id_current_password">
+                        Current Password <span class="text-danger">*</span>
+                    </label>
+                    <div class="input-group">
+                        <input type="password" name="current_password" id="id_current_password" 
+                               class="form-control {% if password_form.current_password.errors %}is-invalid{% endif %}" 
+                               placeholder="Enter current password" autocomplete="current-password" required>
+                        <button class="btn btn-outline-secondary toggle-password-btn" type="button" data-target="id_current_password" aria-label="Toggle password visibility">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                    {% if password_form.current_password.errors %}
+                    <div class="text-danger small mt-1">
+                        {{ password_form.current_password.errors.0 }}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- New Password -->
+                <div class="col-12 col-md-4">
+                    <label class="form-label fw-semibold small mb-1" for="id_new_password">
+                        New Password <span class="text-danger">*</span>
+                    </label>
+                    <div class="input-group">
+                        <input type="password" name="new_password" id="id_new_password" 
+                               class="form-control {% if password_form.new_password.errors %}is-invalid{% endif %}" 
+                               placeholder="Enter new strong password" autocomplete="new-password" required>
+                        <button class="btn btn-outline-secondary toggle-password-btn" type="button" data-target="id_new_password" aria-label="Toggle password visibility">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                    {% if password_form.new_password.errors %}
+                    <div class="text-danger small mt-1">
+                        {{ password_form.new_password.errors.0 }}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Confirm New Password -->
+                <div class="col-12 col-md-4">
+                    <label class="form-label fw-semibold small mb-1" for="id_confirm_new_password">
+                        Confirm New Password <span class="text-danger">*</span>
+                    </label>
+                    <div class="input-group">
+                        <input type="password" name="confirm_new_password" id="id_confirm_new_password" 
+                               class="form-control {% if password_form.confirm_new_password.errors %}is-invalid{% endif %}" 
+                               placeholder="Confirm new password" autocomplete="new-password" required>
+                        <button class="btn btn-outline-secondary toggle-password-btn" type="button" data-target="id_confirm_new_password" aria-label="Toggle password visibility">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                    {% if password_form.confirm_new_password.errors %}
+                    <div class="text-danger small mt-1">
+                        {{ password_form.confirm_new_password.errors.0 }}
+                    </div>
+                    {% endif %}
+                    <div id="matchFeedback" class="small mt-1 d-none"></div>
+                </div>
+            </div>
+
+            <!-- Password Policy Checklist & Live Strength Meter -->
+            <div class="mt-4 p-3 bg-light rounded border">
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                    <span class="small fw-bold text-dark"><i class="bi bi-shield-check me-1 text-primary"></i>Strong Password Requirements:</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <small class="text-muted" id="strengthLabel">Strength: None</small>
+                        <div class="progress" style="width: 120px; height: 6px;">
+                            <div class="progress-bar" id="strengthBar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 g-2 small text-muted">
+                    <div id="rule-length"><i class="bi bi-circle me-1"></i> Minimum 8 characters</div>
+                    <div id="rule-upper"><i class="bi bi-circle me-1"></i> At least one uppercase letter (A-Z)</div>
+                    <div id="rule-lower"><i class="bi bi-circle me-1"></i> At least one lowercase letter (a-z)</div>
+                    <div id="rule-number"><i class="bi bi-circle me-1"></i> At least one number (0-9)</div>
+                    <div id="rule-special"><i class="bi bi-circle me-1"></i> At least one special character (!@#$%^&*)</div>
+                    <div id="rule-match"><i class="bi bi-circle me-1"></i> Passwords must match</div>
+                </div>
+            </div>
+
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mt-4">
+                <div class="small text-muted">
+                    <i class="bi bi-info-circle me-1"></i>Changing your password will terminate all active sessions and redirect to the login screen.
+                </div>
+                <button type="submit" class="btn btn-primary fw-semibold shadow-sm px-4" id="submitPasswordBtn">
+                    <span class="spinner-border spinner-border-sm me-2 d-none" id="submitSpinner" role="status" aria-hidden="true"></span>
+                    <span id="submitBtnText"><i class="bi bi-shield-lock-fill me-1"></i> Update Password</span>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    // Show/Hide Password Toggle
+    document.querySelectorAll('.toggle-password-btn').forEach(function (button) {
+        button.addEventListener('click', function () {
+            const targetId = this.getAttribute('data-target');
+            const input = document.getElementById(targetId);
+            if (!input) return;
+            const icon = this.querySelector('i');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.classList.remove('bi-eye');
+                icon.classList.add('bi-eye-slash');
+            } else {
+                input.type = 'password';
+                icon.classList.remove('bi-eye-slash');
+                icon.classList.add('bi-eye');
+            }
+        });
+    });
+
+    const newPwdInput = document.getElementById('id_new_password');
+    const confirmPwdInput = document.getElementById('id_confirm_new_password');
+    const matchFeedback = document.getElementById('matchFeedback');
+    const strengthBar = document.getElementById('strengthBar');
+    const strengthLabel = document.getElementById('strengthLabel');
+    const form = document.getElementById('adminChangePasswordForm');
+    const submitBtn = document.getElementById('submitPasswordBtn');
+    const submitSpinner = document.getElementById('submitSpinner');
+    const submitBtnText = document.getElementById('submitBtnText');
+
+    function updateRule(elementId, passed) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        const icon = el.querySelector('i');
+        if (passed) {
+            el.classList.remove('text-muted', 'text-danger');
+            el.classList.add('text-success', 'fw-semibold');
+            icon.className = 'bi bi-check-circle-fill text-success me-1';
+        } else {
+            el.classList.remove('text-success', 'fw-semibold');
+            el.classList.add('text-muted');
+            icon.className = 'bi bi-circle me-1';
+        }
+    }
+
+    function checkPasswordStrength() {
+        if (!newPwdInput) return;
+        const val = newPwdInput.value;
+        const hasLength = val.length >= 8;
+        const hasUpper = /[A-Z]/.test(val);
+        const hasLower = /[a-z]/.test(val);
+        const hasNumber = /[0-9]/.test(val);
+        const hasSpecial = /[!@#$%^&*(),.?":{}|<>_~`\-+=\[\]\\;/]/.test(val);
+
+        updateRule('rule-length', hasLength);
+        updateRule('rule-upper', hasUpper);
+        updateRule('rule-lower', hasLower);
+        updateRule('rule-number', hasNumber);
+        updateRule('rule-special', hasSpecial);
+
+        let score = 0;
+        if (hasLength) score += 20;
+        if (hasUpper) score += 20;
+        if (hasLower) score += 20;
+        if (hasNumber) score += 20;
+        if (hasSpecial) score += 20;
+
+        if (strengthBar && strengthLabel) {
+            strengthBar.style.width = score + '%';
+            if (score <= 20) {
+                strengthBar.className = 'progress-bar bg-danger';
+                strengthLabel.textContent = 'Strength: Weak';
+                strengthLabel.className = 'small text-danger fw-semibold';
+            } else if (score <= 60) {
+                strengthBar.className = 'progress-bar bg-warning';
+                strengthLabel.textContent = 'Strength: Medium';
+                strengthLabel.className = 'small text-warning fw-semibold';
+            } else if (score < 100) {
+                strengthBar.className = 'progress-bar bg-info';
+                strengthLabel.textContent = 'Strength: Good';
+                strengthLabel.className = 'small text-info fw-semibold';
+            } else {
+                strengthBar.className = 'progress-bar bg-success';
+                strengthLabel.textContent = 'Strength: Excellent';
+                strengthLabel.className = 'small text-success fw-semibold';
+            }
+            if (val.length === 0) {
+                strengthBar.style.width = '0%';
+                strengthLabel.textContent = 'Strength: None';
+                strengthLabel.className = 'small text-muted';
+            }
+        }
+
+        checkMatch();
+    }
+
+    function checkMatch() {
+        if (!newPwdInput || !confirmPwdInput) return;
+        const p1 = newPwdInput.value;
+        const p2 = confirmPwdInput.value;
+        const matches = (p1.length > 0 && p1 === p2);
+
+        updateRule('rule-match', matches);
+
+        if (matchFeedback) {
+            if (p2.length > 0) {
+                matchFeedback.classList.remove('d-none');
+                if (matches) {
+                    matchFeedback.className = 'small mt-1 text-success fw-semibold';
+                    matchFeedback.innerHTML = '<i class="bi bi-check-circle me-1"></i> Passwords match';
+                } else {
+                    matchFeedback.className = 'small mt-1 text-danger';
+                    matchFeedback.innerHTML = '<i class="bi bi-exclamation-circle me-1"></i> Passwords do not match';
+                }
+            } else {
+                matchFeedback.classList.add('d-none');
+            }
+        }
+    }
+
+    if (newPwdInput) {
+        newPwdInput.addEventListener('input', checkPasswordStrength);
+    }
+    if (confirmPwdInput) {
+        confirmPwdInput.addEventListener('input', checkMatch);
+    }
+
+    // Submit loading state
+    if (form) {
+        form.addEventListener('submit', function () {
+            if (submitBtn && submitSpinner) {
+                submitBtn.disabled = true;
+                submitSpinner.classList.remove('d-none');
+                submitBtnText.textContent = ' Updating Password...';
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

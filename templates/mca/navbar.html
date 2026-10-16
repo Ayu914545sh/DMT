@@ -1,0 +1,330 @@
+{% load hub_tags %}
+<!-- Dedicated MCA Sub-Navbar: Navigation Tabs & Action Toolbar -->
+<div class="mca-navbar-wrapper mb-4">
+    <div class="card card-custom shadow-sm border-0 overflow-hidden">
+        <div class="card-body p-0">
+            <!-- Top Tier: Module Identity, Action Toolbar, Mobile Toggle -->
+            <div class="mca-header-tier d-flex align-items-center justify-content-between p-3 flex-wrap gap-3">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-primary px-2.5 py-1.5 rounded-pill fs-7 fw-bold d-flex align-items-center gap-1.5 shadow-xs">
+                        <i class="bi bi-building"></i>
+                        <span>MCA Module</span>
+                    </span>
+                    <span class="text-secondary small fw-medium d-none d-md-inline">&bull; Authoritative Corporate Registry</span>
+                </div>
+
+                <!-- Reference Image Action Toolbar Buttons -->
+                <div class="mca-action-toolbar d-flex align-items-center flex-wrap gap-2">
+                    <!-- 1. Import Excel / CSV -->
+                    <button type="button" class="btn btn-mca-blue btn-sm fw-semibold shadow-xs" data-bs-toggle="modal" data-bs-target="#mcaImportModal" title="Import MCA Excel or CSV">
+                        <i class="bi bi-file-earmark-spreadsheet me-1"></i>Import Excel / CSV
+                    </button>
+
+                    <!-- 2. Import JSON -->
+                    <button type="button" class="btn btn-mca-white btn-sm fw-semibold shadow-xs" data-bs-toggle="modal" data-bs-target="#mcaImportJsonModal" title="Import MCA JSON file">
+                        <i class="bi bi-filetype-json me-1 text-primary"></i>Import JSON
+                    </button>
+
+                    <!-- 3. Export JSON -->
+                    <a href="{% url 'hub:mca_export_json' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}" class="btn btn-mca-white btn-sm fw-semibold shadow-xs" title="Export MCA records as formatted JSON">
+                        <i class="bi bi-box-arrow-down me-1 text-dark"></i>Export JSON
+                    </a>
+
+                    <!-- 4. Export Filtered Excel -->
+                    <a href="{% url 'hub:mca_export_excel' %}?scope=filtered{% if request.GET.urlencode %}&{{ request.GET.urlencode }}{% endif %}" 
+                       class="btn btn-mca-white btn-sm fw-semibold shadow-xs btn-export-excel" 
+                       id="mcaExportExcelBtn"
+                       data-module="mca"
+                       data-count="{{ total_count|default:0 }}"
+                       title="Export currently filtered MCA records to Excel">
+                        <i class="bi bi-file-earmark-excel me-1 text-success export-icon"></i>
+                        <span class="export-btn-text">Export filtered Excel ({{ total_count|default:0 }} record{{ total_count|default:0|pluralize }})</span>
+                    </a>
+
+                    <!-- 5. Export All Excel -->
+                    <a href="{% url 'hub:mca_export_excel' %}?scope=all" class="btn btn-mca-white btn-sm fw-semibold shadow-xs" title="Export entire MCA database to Excel">
+                        <i class="bi bi-download me-1 text-success"></i>Export All Excel
+                    </a>
+
+                    <!-- 6. + Company -->
+                    <button type="button" class="btn btn-mca-green btn-sm fw-semibold shadow-xs text-white" data-bs-toggle="modal" data-bs-target="#mcaAddCompanyModal" title="Add a new MCA Company / LLP">
+                        <i class="bi bi-plus-lg me-1"></i>+ Company
+                    </button>
+
+                    <!-- 7. Clear All (Admin only or protected) -->
+                    {% if request.user.is_superuser %}
+                    <button type="button" class="btn btn-mca-red btn-sm fw-semibold shadow-xs text-white" data-bs-toggle="modal" data-bs-target="#mcaClearAllModal" title="Clear All MCA Records">
+                        <i class="bi bi-trash3 me-1"></i>Clear All
+                    </button>
+                    {% else %}
+                    <button type="button" class="btn btn-mca-red btn-sm fw-semibold shadow-xs text-white disabled opacity-50" title="Administrator privileges required to clear records" disabled>
+                        <i class="bi bi-lock me-1"></i>Clear All
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: Import Excel / CSV -->
+<!-- ======================================================== -->
+<div class="modal fade" id="mcaImportModal" tabindex="-1" aria-labelledby="mcaImportModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-primary text-white">
+                <h6 class="modal-title fw-bold" id="mcaImportModalLabel">
+                    <i class="bi bi-file-earmark-spreadsheet me-2"></i>Import MCA File (Excel / CSV)
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'hub:mca_upload' %}" method="post" enctype="multipart/form-data" id="mcaExcelImportForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <div class="alert alert-info border-info-subtle small py-2 px-3 mb-3 d-flex align-items-center gap-2">
+                        <i class="bi bi-info-circle-fill fs-5"></i>
+                        <span>Upload MCA Company or LLP datasets (.xlsx or .csv). Headers and phone cleaning are validated automatically.</span>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="mcaModalFileInput" class="form-label fw-semibold small">Choose MCA File (.xlsx, .csv)</label>
+                        <input class="form-control" type="file" id="mcaModalFileInput" name="data_file" accept=".xlsx,.csv" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="mcaModalSheetName" class="form-label fw-semibold small text-muted">Sheet Name (Optional for Excel)</label>
+                        <input type="text" class="form-control form-control-sm" id="mcaModalSheetName" name="sheet_name" placeholder="Leave blank for first sheet">
+                    </div>
+
+                    <!-- Progress bar -->
+                    <div class="progress d-none mt-3" id="mcaImportProgress" style="height: 6px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" role="progressbar" style="width: 100%"></div>
+                    </div>
+                    <div class="small text-muted mt-1 d-none" id="mcaImportProgressText">Validating and uploading file...</div>
+                </div>
+                <div class="modal-footer bg-light-subtle">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm fw-semibold" id="mcaImportSubmitBtn">
+                        <i class="bi bi-cloud-arrow-up-fill me-1"></i>Upload & Process
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: Import JSON -->
+<!-- ======================================================== -->
+<div class="modal fade" id="mcaImportJsonModal" tabindex="-1" aria-labelledby="mcaImportJsonModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-dark text-white">
+                <h6 class="modal-title fw-bold" id="mcaImportJsonModalLabel">
+                    <i class="bi bi-filetype-json me-2 text-warning"></i>Import MCA JSON
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'hub:mca_import_json' %}" method="post" enctype="multipart/form-data" id="mcaJsonImportForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <p class="text-muted small mb-3">Upload a JSON array of MCA entity records. Supports fields: <code>name</code>, <code>entity_id</code> (CIN/LLPIN), <code>entity_type</code>, <code>state</code>, <code>directors</code>, etc.</p>
+
+                    <div class="mb-3">
+                        <label for="mcaJsonFileInput" class="form-label fw-semibold small">Choose JSON File (.json)</label>
+                        <input class="form-control" type="file" id="mcaJsonFileInput" name="json_file" accept=".json,application/json" required>
+                    </div>
+
+                    <!-- Progress -->
+                    <div class="progress d-none mt-3" id="mcaJsonProgress" style="height: 6px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-info" role="progressbar" style="width: 100%"></div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light-subtle">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm fw-semibold" id="mcaJsonSubmitBtn">
+                        <i class="bi bi-upload me-1"></i>Import JSON Records
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: + Company (Create MCA Company) -->
+<!-- ======================================================== -->
+<div class="modal fade" id="mcaAddCompanyModal" tabindex="-1" aria-labelledby="mcaAddCompanyModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-success text-white">
+                <h6 class="modal-title fw-bold" id="mcaAddCompanyModalLabel">
+                    <i class="bi bi-building-add me-2"></i>Add New MCA Company / LLP
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'hub:mca_create_company' %}" method="post" id="mcaAddCompanyForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <div class="row g-3">
+                        <div class="col-md-8">
+                            <label class="form-label fw-semibold small">Company / Entity Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control form-control-sm" name="name" required placeholder="e.g. ACME INFOTECH PRIVATE LIMITED">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Entity Type <span class="text-danger">*</span></label>
+                            <select class="form-select form-select-sm" name="entity_type" required>
+                                <option value="company" selected>Company</option>
+                                <option value="llp">LLP</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">CIN / LLPIN (Entity Identifier) <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control form-control-sm font-monospace text-uppercase" name="entity_id" required placeholder="e.g. U72200MH2021PTC123456">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">Company Email</label>
+                            <input type="email" class="form-control form-control-sm" name="email" placeholder="contact@example.com">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">State</label>
+                            <input type="text" class="form-control form-control-sm" name="state" placeholder="e.g. Maharashtra">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">City</label>
+                            <input type="text" class="form-control form-control-sm" name="city" placeholder="e.g. Mumbai">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">ROC Code</label>
+                            <input type="text" class="form-control form-control-sm" name="roc" placeholder="e.g. RoC-Mumbai">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Date of Incorporation</label>
+                            <input type="date" class="form-control form-control-sm" name="date_of_incorporation">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Paid-up Capital (₹)</label>
+                            <input type="number" step="0.01" class="form-control form-control-sm" name="paid_up_capital" placeholder="e.g. 100000">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Authorized Capital (₹)</label>
+                            <input type="number" step="0.01" class="form-control form-control-sm" name="authorized_capital" placeholder="e.g. 500000">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">NIC Code</label>
+                            <input type="text" class="form-control form-control-sm" name="nic_code" placeholder="e.g. 62099">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">Class of Company</label>
+                            <input type="text" class="form-control form-control-sm" name="class_of_company" placeholder="e.g. Private">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold small">Registered Address</label>
+                            <textarea class="form-control form-control-sm" name="registered_address" rows="2" placeholder="Complete registered office address"></textarea>
+                        </div>
+
+                        <!-- Optional Initial Director -->
+                        <div class="col-12 mt-3 pt-3 border-top">
+                            <h6 class="fw-bold small text-muted text-uppercase mb-2"><i class="bi bi-person me-1"></i>Primary Director (Optional)</h6>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Director Name</label>
+                            <input type="text" class="form-control form-control-sm" name="director_name" placeholder="Full Name">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Director Mobile</label>
+                            <input type="text" class="form-control form-control-sm" name="director_mobile" placeholder="10-digit phone">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Director Email</label>
+                            <input type="email" class="form-control form-control-sm" name="director_email" placeholder="director@example.com">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light-subtle">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success btn-sm fw-semibold">
+                        <i class="bi bi-check-lg me-1"></i>Create Company
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: Clear All MCA Records (Strictly Admin Authorized) -->
+<!-- ======================================================== -->
+<div class="modal fade" id="mcaClearAllModal" tabindex="-1" aria-labelledby="mcaClearAllModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-danger text-white">
+                <h6 class="modal-title fw-bold" id="mcaClearAllModalLabel">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Clear All MCA Records
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'hub:mca_clear_all' %}" method="post" id="mcaClearAllForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <div class="alert alert-danger py-2 px-3 small mb-3">
+                        <strong>Warning: Destructive Operation!</strong> This action will permanently remove all MCA Company and Director records from the database. This action cannot be easily undone.
+                    </div>
+                    <p class="small text-muted mb-2">To prevent accidental deletion, please type <strong class="text-danger user-select-all">CLEAR MCA</strong> into the box below to confirm:</p>
+                    <input type="text" class="form-control form-control-sm mb-3" name="confirmation_code" id="clearMcaConfirmInput" placeholder="CLEAR MCA" required autocomplete="off">
+                </div>
+                <div class="modal-footer bg-light-subtle">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger btn-sm fw-semibold" id="confirmClearMcaBtn" disabled>
+                        <i class="bi bi-trash3-fill me-1"></i>Permanently Clear All
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Sub-Navbar Script for Dialog Validations & Loading -->
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Clear All Confirmation Input Listener
+    const clearInput = document.getElementById('clearMcaConfirmInput');
+    const clearBtn = document.getElementById('confirmClearMcaBtn');
+    if (clearInput && clearBtn) {
+        clearInput.addEventListener('input', () => {
+            clearBtn.disabled = clearInput.value.trim().toUpperCase() !== 'CLEAR MCA';
+        });
+    }
+
+    // Excel import form spinner feedback
+    const excelForm = document.getElementById('mcaExcelImportForm');
+    const excelProgress = document.getElementById('mcaImportProgress');
+    const excelText = document.getElementById('mcaImportProgressText');
+    const excelSubmit = document.getElementById('mcaImportSubmitBtn');
+    if (excelForm) {
+        excelForm.addEventListener('submit', () => {
+            if (excelProgress) excelProgress.classList.remove('d-none');
+            if (excelText) excelText.classList.remove('d-none');
+            if (excelSubmit) {
+                excelSubmit.disabled = true;
+                excelSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Uploading...';
+            }
+        });
+    }
+
+    // JSON import spinner feedback
+    const jsonForm = document.getElementById('mcaJsonImportForm');
+    const jsonProgress = document.getElementById('mcaJsonProgress');
+    const jsonSubmit = document.getElementById('mcaJsonSubmitBtn');
+    if (jsonForm) {
+        jsonForm.addEventListener('submit', () => {
+            if (jsonProgress) jsonProgress.classList.remove('d-none');
+            if (jsonSubmit) {
+                jsonSubmit.disabled = true;
+                jsonSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Processing JSON...';
+            }
+        });
+    }
+});
+</script>

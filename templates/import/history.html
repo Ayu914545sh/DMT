@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+
+{% block title %}Import History - Unified Data Hub{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">Ingestion History</h4>
+        <p class="text-muted small mb-0">Audit of all uploaded datasets, staging runs, and publication outcomes.</p>
+    </div>
+    <a href="{% url 'hub:import_upload' %}" class="btn btn-primary btn-sm fw-semibold">
+        <i class="bi bi-cloud-arrow-up-fill me-1"></i> Upload New Dataset
+    </a>
+</div>
+
+<div class="card card-custom shadow-sm overflow-hidden mb-4">
+    <div class="card-header-custom">
+        <div class="d-flex gap-2">
+            <a href="{% url 'hub:import_history' %}" class="btn btn-sm btn-outline-secondary {% if not dataset %}active{% endif %}">All Datasets</a>
+            <a href="{% url 'hub:import_history' %}?dataset=MCA" class="btn btn-sm btn-outline-secondary {% if dataset == 'MCA' %}active{% endif %}">MCA Only</a>
+            <a href="{% url 'hub:import_history' %}?dataset=GST" class="btn btn-sm btn-outline-secondary {% if dataset == 'GST' %}active{% endif %}">GST Only</a>
+        </div>
+        <div class="small text-muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-custom align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Batch ID</th>
+                    <th>Dataset</th>
+                    <th>Source File</th>
+                    <th>Format</th>
+                    <th>Input Rows</th>
+                    <th>Committed</th>
+                    <th>Status</th>
+                    <th>Timestamp</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for batch in page_obj %}
+                <tr>
+                    <td>
+                        <a href="{% url 'hub:import_batch_detail' batch.batch_id %}" class="fw-bold font-monospace text-decoration-none">
+                            {{ batch.batch_id }}
+                        </a>
+                    </td>
+                    <td>
+                        <span class="badge {% if batch.dataset_type == 'MCA' %}badge-company{% else %}bg-primary-subtle text-primary border{% endif %}">
+                            {{ batch.dataset_type }}
+                        </span>
+                    </td>
+                    <td class="text-truncate" style="max-width: 220px;">{{ batch.file_name }}</td>
+                    <td><span class="badge bg-light text-dark border">{{ batch.file_format }}</span></td>
+                    <td><strong>{{ batch.total_input_rows }}</strong></td>
+                    <td><strong class="text-success">{{ batch.imported_records }}</strong></td>
+                    <td>
+                        <span class="badge {% if batch.status == 'COMPLETED' %}bg-success{% elif batch.status == 'PREVIEWED' %}bg-warning text-dark{% elif batch.status == 'FAILED' %}bg-danger{% else %}bg-secondary{% endif %}">
+                            {{ batch.status }}
+                        </span>
+                    </td>
+                    <td class="text-muted small">{{ batch.created_at|date:"M d, Y H:i" }}</td>
+                    <td>
+                        <div class="btn-group btn-group-sm">
+                            <a href="{% url 'hub:import_batch_detail' batch.batch_id %}" class="btn btn-outline-secondary" title="View Detail">
+                                <i class="bi bi-eye"></i>
+                            </a>
+                            <a href="{% url 'hub:download_cleaning_report' batch.batch_id %}" class="btn btn-outline-primary" title="Download Report">
+                                <i class="bi bi-file-earmark-arrow-down"></i>
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" class="text-center py-4 text-muted">No import history found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if page_obj.has_other_pages %}
+    <div class="p-3 border-top d-flex justify-content-between align-items-center">
+        <span class="small text-muted">Showing {{ page_obj.start_index }}-{{ page_obj.end_index }} of {{ page_obj.paginator.count }}</span>
+        <ul class="pagination pagination-sm mb-0">
+            {% if page_obj.has_previous %}
+            <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if dataset %}&dataset={{ dataset }}{% endif %}">Previous</a></li>
+            {% endif %}
+            <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+            {% if page_obj.has_next %}
+            <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{% if dataset %}&dataset={{ dataset }}{% endif %}">Next</a></li>
+            {% endif %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

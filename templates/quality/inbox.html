@@ -1,0 +1,244 @@
+{% extends 'base.html' %}
+
+{% block title %}Quality Inbox - Unified Data Hub{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">Data Quality Inbox</h4>
+        <p class="text-muted small mb-0">Review rejected contact numbers, unparsable formats, and anomalous data values &bull; <span id="totalQualityItemsDisplay">{{ total_inbox_items|default:0 }}</span> total items</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <a href="{% url 'hub:quality_inbox' %}" class="btn btn-outline-secondary btn-sm fw-semibold" title="Refresh inbox list">
+            <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+        </a>
+        {% if request.user.is_superuser %}
+            {% if total_inbox_items > 0 %}
+            <button type="button" class="btn btn-danger btn-sm fw-semibold shadow-xs" data-bs-toggle="modal" data-bs-target="#clearQualityModal" id="openClearQualityModalBtn" title="Clear all quality inbox items">
+                <i class="bi bi-trash3-fill me-1"></i> Clear All
+            </button>
+            {% else %}
+            <button type="button" class="btn btn-danger btn-sm fw-semibold shadow-xs disabled opacity-50" title="No items in quality inbox to clear" disabled aria-disabled="true">
+                <i class="bi bi-trash3-fill me-1"></i> Clear All
+            </button>
+            {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+<!-- Filters Bar -->
+<div class="card card-custom p-3 mb-4 shadow-sm">
+    <form method="get" class="row g-2 align-items-center" id="qualityFilterForm">
+        <div class="col-md-3">
+            <select name="status" class="form-select form-select-sm">
+                <option value="open" {% if status == 'open' %}selected{% endif %}>Open Issues (Unresolved)</option>
+                <option value="resolved" {% if status == 'resolved' %}selected{% endif %}>Resolved Issues</option>
+                <option value="all" {% if status == 'all' %}selected{% endif %}>All Issues</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <select name="dataset" class="form-select form-select-sm">
+                <option value="">All Datasets</option>
+                <option value="MCA" {% if dataset == 'MCA' %}selected{% endif %}>MCA Only</option>
+                <option value="GST" {% if dataset == 'GST' %}selected{% endif %}>GST Only</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <select name="error_code" class="form-select form-select-sm">
+                <option value="">All Error Codes</option>
+                {% for ec in error_codes %}
+                <option value="{{ ec }}" {% if error_code == ec %}selected{% endif %}>{{ ec }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button type="submit" class="btn btn-primary btn-sm w-100 fw-semibold">
+                <i class="bi bi-funnel me-1"></i> Filter Inbox
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- Issues Table -->
+<div class="card card-custom shadow-sm overflow-hidden mb-4">
+    <div class="table-responsive">
+        <table class="table table-custom align-middle mb-0" id="qualityIssuesTable">
+            <thead>
+                <tr>
+                    <th>Issue ID</th>
+                    <th>Dataset</th>
+                    <th>Entity Identifier</th>
+                    <th>Target Field</th>
+                    <th>Reason Code</th>
+                    <th>Raw Value Observed</th>
+                    <th>Description</th>
+                    <th>State</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for issue in page_obj %}
+                <tr>
+                    <td class="font-monospace text-muted">#{{ issue.id }}</td>
+                    <td>
+                        <span class="badge {% if issue.dataset_type == 'MCA' %}badge-company{% else %}bg-primary-subtle text-primary border{% endif %}">
+                            {{ issue.dataset_type }}
+                        </span>
+                    </td>
+                    <td class="font-monospace fw-semibold">{{ issue.entity_identifier }}</td>
+                    <td><span class="badge bg-light text-dark border">{{ issue.field_name }}</span></td>
+                    <td><span class="badge badge-flagged">{{ issue.error_code }}</span></td>
+                    <td class="font-monospace small text-muted" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {{ issue.raw_value }}
+                    </td>
+                    <td class="small text-muted" style="max-width: 250px;">
+                        {{ issue.reason_description }}
+                    </td>
+                    <td>
+                        {% if issue.is_resolved %}
+                        <span class="badge badge-valid">RESOLVED</span>
+                        {% else %}
+                        <span class="badge bg-warning text-dark">OPEN</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not issue.is_resolved %}
+                        <button type="button" class="btn btn-sm btn-outline-success py-1 px-2" data-bs-toggle="modal" data-bs-target="#resolveModal{{ issue.id }}">
+                            <i class="bi bi-check2"></i> Resolve
+                        </button>
+
+                        <!-- Modal -->
+                        <div class="modal fade" id="resolveModal{{ issue.id }}" tabindex="-1">
+                            <div class="modal-dialog modal-dialog-centered">
+                                <div class="modal-content border-0 shadow">
+                                    <div class="modal-header">
+                                        <h6 class="modal-title fw-bold">Sign-Off Issue #{{ issue.id }}</h6>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <form action="{% url 'hub:quality_resolve' issue.id %}" method="post">
+                                        {% csrf_token %}
+                                        <div class="modal-body">
+                                            <p class="small text-muted mb-3">
+                                                Entity: <strong>{{ issue.entity_identifier }}</strong><br>
+                                                Field: <strong>{{ issue.field_name }}</strong> &bull; Raw: <code>{{ issue.raw_value }}</code>
+                                            </p>
+
+                                            {% if 'phone' in issue.error_code|lower or 'mobile' in issue.error_code|lower %}
+                                            <div class="mb-3">
+                                                <label class="form-label small fw-semibold">Correct Phone Number (Optional)</label>
+                                                <input type="text" name="corrected_phone" class="form-control form-control-sm" placeholder="10-digit valid Indian mobile">
+                                                <small class="text-muted">If provided, phone will be validated and updated directly on the entity record.</small>
+                                            </div>
+                                            {% endif %}
+
+                                            <label class="form-label small fw-semibold">Resolution Note / Sign-Off Reason <span class="text-danger">*</span></label>
+                                            <textarea name="note" class="form-control form-control-sm" rows="2" placeholder="Explain verification action or manual correction..." required></textarea>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                                            <button type="submit" class="btn btn-sm btn-success fw-semibold">
+                                                <i class="bi bi-check-circle me-1"></i> Save & Mark Resolved
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <small class="text-muted d-block font-monospace" style="font-size: 0.75rem;">
+                            {{ issue.resolved_at|date:"M d, H:i" }}
+                        </small>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" class="text-center py-5 text-muted">
+                        No quality issues found matching your filter criteria.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <div class="p-3 border-top d-flex justify-content-between align-items-center">
+        <span class="small text-muted">Showing {{ page_obj.start_index }}-{{ page_obj.end_index }} of {{ page_obj.paginator.count }} issues</span>
+        <ul class="pagination pagination-sm mb-0">
+            {% if page_obj.has_previous %}
+            <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if dataset %}&dataset={{ dataset }}{% endif %}{% if status %}&status={{ status }}{% endif %}">Previous</a></li>
+            {% endif %}
+            <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+            {% if page_obj.has_next %}
+            <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{% if dataset %}&dataset={{ dataset }}{% endif %}{% if status %}&status={{ status }}{% endif %}">Next</a></li>
+            {% endif %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: Confirmation Dialog for Clear All Quality Inbox   -->
+<!-- ======================================================== -->
+{% if request.user.is_superuser %}
+<div class="modal fade" id="clearQualityModal" tabindex="-1" aria-labelledby="clearQualityModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-danger text-white">
+                <h6 class="modal-title fw-bold" id="clearQualityModalLabel">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Clear all quality inbox items?
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" id="clearQualityCloseX"></button>
+            </div>
+            <form action="{% url 'hub:quality_clear_all' %}" method="post" id="clearQualityForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <div class="alert alert-danger border-danger-subtle small py-2 px-3 mb-3 d-flex align-items-start gap-2">
+                        <i class="bi bi-shield-fill-x fs-5 text-danger flex-shrink-0"></i>
+                        <div>
+                            <strong>Destructive Operation:</strong> This will remove all current items from the Quality Inbox. This action cannot be undone.
+                        </div>
+                    </div>
+                    <p class="text-secondary small mb-0">
+                        MCA, GST, companies, directors, users, and audit-log records will remain completely intact. Only unresolved and resolved quality inbox items will be cleared.
+                    </p>
+                </div>
+                <div class="modal-footer bg-light-subtle d-flex justify-content-between">
+                    <button type="button" class="btn btn-secondary btn-sm px-3 fw-semibold" data-bs-dismiss="modal" id="cancelClearQualityBtn">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn btn-danger btn-sm px-4 fw-semibold" id="confirmClearQualityBtn">
+                        <i class="bi bi-trash3-fill me-1"></i> Clear All
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const clearForm = document.getElementById('clearQualityForm');
+    const confirmBtn = document.getElementById('confirmClearQualityBtn');
+    const cancelBtn = document.getElementById('cancelClearQualityBtn');
+    const closeX = document.getElementById('clearQualityCloseX');
+
+    if (clearForm && confirmBtn) {
+        clearForm.addEventListener('submit', function(e) {
+            // Prevent duplicate clicks & show loading state
+            if (confirmBtn.disabled) {
+                e.preventDefault();
+                return false;
+            }
+            confirmBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+            if (closeX) closeX.disabled = true;
+            confirmBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Clearing...';
+        });
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

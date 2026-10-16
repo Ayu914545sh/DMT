@@ -1,0 +1,273 @@
+{% load hub_tags %}
+<tbody id="gstTableBody">
+    {% for gst in page_obj %}
+    <tr id="gst-row-{{ gst.id }}">
+        <td class="font-monospace fw-semibold">
+            <div class="d-inline-flex align-items-center gap-2">
+                <button type="button" 
+                        class="btn-row-toggle" 
+                        data-bs-toggle="collapse" 
+                        data-bs-target="#gst-detail-{{ gst.id }}" 
+                        aria-expanded="false" 
+                        aria-controls="gst-detail-{{ gst.id }}" 
+                        aria-label="Expand entity details" 
+                        title="Expand entity details">
+                    <i class="bi bi-chevron-down toggle-icon"></i>
+                </button>
+                <span class="user-select-all">{{ gst.gst_number }}</span>
+            </div>
+        </td>
+        <td>
+            <strong class="text-dark d-block text-truncate" style="max-width: 220px;" title="{{ gst.trade_name }}">
+                {{ gst.trade_name|default:"-" }}
+            </strong>
+        </td>
+        <td>
+            <span class="text-muted d-block text-truncate" style="max-width: 220px;" title="{{ gst.legal_name }}">
+                {{ gst.legal_name|default:"-" }}
+            </span>
+        </td>
+        <td>
+            {% if gst.status == 'ACT' %}
+            <span class="badge bg-success-subtle text-success border border-success-subtle">ACT</span>
+            {% else %}
+            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">{{ gst.status|default:"N/A" }}</span>
+            {% endif %}
+        </td>
+        <td>
+            <span class="badge bg-light text-dark border">{{ gst.source_type|default:"-" }}</span>
+        </td>
+        <td class="font-monospace small user-select-all">{{ gst.pan|default:"-" }}</td>
+        <td>
+            {% if gst.canonical_mobile %}
+            <span class="badge badge-valid font-monospace user-select-all">{{ gst.canonical_mobile|format_phone }}</span>
+            {% elif gst.contact_validity == 'FLAGGED' or gst.contact_validity == 'invalid' %}
+            <span class="badge badge-flagged user-select-all">{{ gst.raw_mobile|default:"FLAGGED" }}</span>
+            {% else %}
+            <span class="badge badge-blank">BLANK</span>
+            {% endif %}
+        </td>
+        <td>
+            <small class="text-muted d-block text-truncate font-monospace user-select-all" style="max-width: 150px;" title="{{ gst.email }}">
+                {{ gst.email|default:"-" }}
+            </small>
+        </td>
+        <td>
+            <div class="text-truncate" style="max-width: 130px;" title="{{ gst.city }}">{{ gst.city|default:"-" }}</div>
+            <small class="text-muted text-truncate d-block" style="max-width: 130px;" title="{{ gst.state }}">{{ gst.state|default:"-" }}</small>
+        </td>
+        <td class="small">{{ gst.registration_date|date:"d M Y"|default:"-" }}</td>
+        <td class="text-end">
+            <div class="btn-group btn-group-sm">
+                <a href="{% url 'hub:gst_detail' gst.id %}" class="btn btn-outline-secondary" title="View Full Profile">
+                    <i class="bi bi-eye"></i>
+                </a>
+                <a href="{% url 'hub:gst_edit' gst.id %}" class="btn btn-outline-secondary" title="Edit GST Record">
+                    <i class="bi bi-pencil"></i>
+                </a>
+                {% if request.user.is_superuser %}
+                <button type="button" 
+                        class="btn btn-outline-danger btn-delete-record" 
+                        data-record-id="{{ gst.id }}"
+                        data-record-name="{{ gst.trade_name|default:gst.legal_name|default:gst.gst_number }}"
+                        data-record-identifier="{{ gst.gst_number }}"
+                        data-module-type="GST"
+                        data-delete-url="{% url 'hub:gst_delete' gst.id %}"
+                        title="Delete record" 
+                        aria-label="Delete record">
+                    <i class="bi bi-trash"></i>
+                </button>
+                {% endif %}
+            </div>
+        </td>
+    </tr>
+    <!-- Inline Expandable Detail Row for GST -->
+    <tr class="entity-detail-row" id="gst-detail-row-{{ gst.id }}">
+        <td colspan="11">
+            <div class="collapse entity-detail-collapse" id="gst-detail-{{ gst.id }}">
+                <div class="entity-detail-container">
+                    <!-- Top Bar with Title & Quick Info -->
+                    <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom flex-wrap gap-2">
+                        <div class="d-flex align-items-center gap-2">
+                            <i class="bi bi-receipt text-primary fs-5"></i>
+                            <span class="fw-bold text-dark fs-6">{{ gst.trade_name|default:gst.legal_name|default:gst.gst_number }}</span>
+                            <span class="badge bg-light text-dark border font-monospace">{{ gst.gst_number }}</span>
+                            {% if gst.status == 'ACT' %}
+                            <span class="badge bg-success-subtle text-success border border-success-subtle">ACT</span>
+                            {% else %}
+                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">{{ gst.status|default:"N/A" }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <a href="{% url 'hub:gst_edit' gst.id %}" class="btn btn-sm btn-outline-secondary fw-semibold">
+                                <i class="bi bi-pencil me-1"></i> Edit Registration
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Key Entity Fields Grid for GST -->
+                    <div class="row g-2">
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">GST Number</div>
+                                <div class="field-value font-monospace user-select-all">{{ gst.gst_number }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Legal Name</div>
+                                <div class="field-value user-select-all">{{ gst.legal_name|default:"Not recorded" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Trade Name</div>
+                                <div class="field-value user-select-all">{{ gst.trade_name|default:"Not recorded" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Registration Type</div>
+                                <div class="field-value"><span class="badge bg-light text-dark border">{{ gst.source_type|default:"REG" }}</span></div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Registration Date</div>
+                                <div class="field-value">{{ gst.registration_date|date:"d M Y"|default:"Not recorded" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">GST Type</div>
+                                <div class="field-value">{{ gst.gst_type|default:"Standard" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Status</div>
+                                <div class="field-value">
+                                    {% if gst.status == 'ACT' %}
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle">ACT</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">{{ gst.status|default:"-" }}</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">PAN</div>
+                                <div class="field-value font-monospace user-select-all">{{ gst.pan|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Jurisdiction</div>
+                                <div class="field-value">{{ gst.jurisdiction|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">State Jurisdiction</div>
+                                <div class="field-value">{{ gst.state_jurisdiction|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Mobile</div>
+                                <div class="field-value">
+                                    {% if gst.canonical_mobile %}
+                                    <span class="badge badge-valid font-monospace fs-6 user-select-all">{{ gst.canonical_mobile|format_phone }}</span>
+                                    {% else %}
+                                    <span class="font-monospace text-muted">{{ gst.raw_mobile|default:"-" }}</span>
+                                    {% endif %}
+                                    {% if gst.contact_validity == 'FLAGGED' or gst.contact_validity == 'invalid' %}
+                                    <span class="badge badge-flagged ms-1">FLAGGED</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Email</div>
+                                <div class="field-value font-monospace text-truncate user-select-all">{{ gst.email|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Pincode</div>
+                                <div class="field-value font-monospace user-select-all">{{ gst.pincode|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">State</div>
+                                <div class="field-value">{{ gst.state|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">City</div>
+                                <div class="field-value">{{ gst.city|default:"-" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                            <div class="entity-field-card">
+                                <div class="field-label">Insert Time</div>
+                                <div class="field-value small font-monospace">{{ gst.source_insert_time|date:"Y-m-d H:i:s"|default:"Not recorded" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="entity-field-card">
+                                <div class="field-label">Nature of Business</div>
+                                <div class="field-value small">{{ gst.nature_of_business|default:"Not recorded" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="entity-field-card">
+                                <div class="field-label">Address</div>
+                                <div class="field-value small user-select-all">{{ gst.address|default:"No address recorded" }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </td>
+    </tr>
+    {% empty %}
+    <tr>
+        <td colspan="11" class="text-center py-5 text-muted" id="gstEmptyState">
+            <i class="bi bi-inbox d-block fs-1 text-muted mb-2"></i>
+            <span class="fw-semibold fs-5">No matching GST records found</span>
+            <div class="small text-muted mt-1">
+                {% if has_active_filters %}
+                Try adjusting your search filters or <button type="button" class="btn btn-link btn-sm p-0 btn-clear-all-filters fw-semibold">clearing all filters</button>.
+                {% else %}
+                No GST registrations exist in the database. Use <strong>Import Excel / CSV</strong> or <strong>+ New Row</strong> to add GST data.
+                {% endif %}
+            </div>
+        </td>
+    </tr>
+    {% endfor %}
+</tbody>
+
+<!-- Pagination -->
+{% if page_obj.has_other_pages %}
+<div class="p-3 border-top d-flex justify-content-between align-items-center flex-wrap gap-2" id="paginationWrapper">
+    <span class="small text-muted">Showing {{ page_obj.start_index }}-<span id="pageEndIndex">{{ page_obj.end_index }}</span> of <span id="paginationTotalCount">{{ page_obj.paginator.count }}</span> registrations</span>
+    <ul class="pagination pagination-sm mb-0">
+        {% if page_obj.has_previous %}
+        <li class="page-item"><a class="page-link ajax-page-link" href="?{% url_replace page=page_obj.previous_page_number %}" data-page="{{ page_obj.previous_page_number }}">Previous</a></li>
+        {% endif %}
+        <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+        {% if page_obj.has_next %}
+        <li class="page-item"><a class="page-link ajax-page-link" href="?{% url_replace page=page_obj.next_page_number %}" data-page="{{ page_obj.next_page_number }}">Next</a></li>
+        {% endif %}
+    </ul>
+</div>
+{% elif total_count > 0 %}
+<div class="p-3 border-top d-flex justify-content-between align-items-center flex-wrap gap-2" id="paginationWrapper">
+    <span class="small text-muted">Showing {{ page_obj.start_index }}-<span id="pageEndIndex">{{ page_obj.end_index }}</span> of <span id="paginationTotalCount">{{ total_count }}</span> registrations</span>
+</div>
+{% endif %}

@@ -1,0 +1,287 @@
+{% extends 'base.html' %}
+{% load hub_tags %}
+
+{% block title %}Staging Preview - Import Center{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0">
+    <!-- Stepper Navigation -->
+    <div class="stepper-nav" style="max-width: 900px; margin: 0 auto 2rem auto;">
+        <div class="stepper-step completed">
+            <span class="stepper-circle"><i class="bi bi-check"></i></span>
+            <span>Upload File</span>
+        </div>
+        <div class="stepper-step completed">
+            <span class="stepper-circle"><i class="bi bi-check"></i></span>
+            <span>Column Mapping</span>
+        </div>
+        <div class="stepper-step active">
+            <span class="stepper-circle">3</span>
+            <span>Preview & Validation</span>
+        </div>
+        <div class="stepper-step">
+            <span class="stepper-circle">4</span>
+            <span>Publish to DB</span>
+        </div>
+    </div>
+
+    <!-- Executive Preview Metrics -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-2">
+            <div class="kpi-card shadow-sm text-center py-3">
+                <div class="kpi-title">Total Rows</div>
+                <div class="kpi-value text-dark fs-3">{{ batch.total_input_rows }}</div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="kpi-card shadow-sm text-center py-3">
+                <div class="kpi-title">New Records</div>
+                <div class="kpi-value text-success fs-3">{{ batch.proposed_new_records }}</div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="kpi-card shadow-sm text-center py-3">
+                <div class="kpi-title">Updates</div>
+                <div class="kpi-value text-primary fs-3">{{ batch.proposed_updates }}</div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="kpi-card shadow-sm text-center py-3">
+                <div class="kpi-title">Unchanged</div>
+                <div class="kpi-value text-secondary fs-3">{{ batch.unchanged_records }}</div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="kpi-card shadow-sm text-center py-3">
+                <div class="kpi-title">Flagged / Warn</div>
+                <div class="kpi-value text-warning fs-3">{{ batch.missing_invalid_values }}</div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="kpi-card shadow-sm text-center py-3">
+                <div class="kpi-title">Quarantined</div>
+                <div class="kpi-value text-danger fs-3">{{ batch.quarantined_rows }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Publishing Action Bar -->
+    <div class="card card-custom p-3 mb-4 bg-white shadow-sm border-primary border-opacity-25">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-shield-check text-primary fs-3"></i>
+                <div>
+                    <h6 class="fw-bold mb-0">Data Cleaning & Staging Completed</h6>
+                    <small class="text-muted">Review before/after values and row-level errors below. Cleaned values match database storage exactly.</small>
+                </div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <!-- 1. Clean Data (Re-run) -->
+                <form action="{% url 'hub:import_reclean' batch.batch_id %}" method="post" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-primary btn-sm" title="Re-run data cleaning rules on uploaded rows">
+                        <i class="bi bi-magic me-1"></i> Clean Data
+                    </button>
+                </form>
+
+                <!-- 2. Download Cleaned File -->
+                <a href="{% url 'hub:download_cleaned_file' batch.batch_id %}" class="btn btn-outline-success btn-sm" title="Download sanitized and cleaned dataset as CSV">
+                    <i class="bi bi-file-earmark-check me-1"></i> Download Cleaned File
+                </a>
+
+                <!-- 3. Download Error Report -->
+                <a href="{% url 'hub:download_cleaning_report' batch.batch_id %}" class="btn btn-outline-secondary btn-sm" title="Download row-by-row validation & error report">
+                    <i class="bi bi-file-earmark-text me-1"></i> Error Report
+                </a>
+
+                <!-- 4. Reset Batch -->
+                <form action="{% url 'hub:import_reset' batch.batch_id %}" method="post" class="d-inline" onsubmit="return confirm('Reset staged records and return to column mapping?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-danger btn-sm" title="Reset staging and return to column mapping">
+                        <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+                    </button>
+                </form>
+
+                <!-- 5. Change Mapping -->
+                <a href="{% url 'hub:import_map' batch.batch_id %}" class="btn btn-outline-secondary btn-sm">
+                    <i class="bi bi-pencil me-1"></i> Change Mapping
+                </a>
+
+                <!-- 6. Apply & Save to Database -->
+                <form action="{% url 'hub:import_execute' batch.batch_id %}" method="post" class="d-inline" id="publishToDbForm">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-primary btn-sm fw-semibold px-3 shadow-sm" id="publishToDbBtn">
+                        <i class="bi bi-check-circle-fill me-1"></i> Apply & Save to Database
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Candidate Staged Rows Inspector -->
+    <div class="card card-custom mb-4 shadow-sm overflow-hidden">
+        <div class="card-header-custom">
+            <div class="d-flex align-items-center gap-3">
+                <h6 class="fw-bold mb-0">Staged Row Candidates</h6>
+                <div class="btn-group btn-group-sm">
+                    <a href="{% url 'hub:import_preview' batch.batch_id %}" class="btn btn-outline-secondary {% if not status_filter %}active{% endif %}">All</a>
+                    <a href="{% url 'hub:import_preview' batch.batch_id %}?status=VALID" class="btn btn-outline-secondary {% if status_filter == 'VALID' %}active{% endif %}">Valid</a>
+                    <a href="{% url 'hub:import_preview' batch.batch_id %}?status=WARNING" class="btn btn-outline-secondary {% if status_filter == 'WARNING' %}active{% endif %}">Warnings</a>
+                    <a href="{% url 'hub:import_preview' batch.batch_id %}?status=QUARANTINE" class="btn btn-outline-secondary {% if status_filter == 'QUARANTINE' %}active{% endif %}">Quarantined</a>
+                </div>
+            </div>
+            <div class="small text-muted">Showing {{ page_obj.start_index }}-{{ page_obj.end_index }} of {{ page_obj.paginator.count }}</div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-custom align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th style="width: 5%;">Row #</th>
+                        <th style="width: 8%;">Action</th>
+                        <th style="width: 8%;">Status</th>
+                        <th style="width: 22%;">Primary Entity</th>
+                        <th style="width: 17%;">Contact & Email</th>
+                        <th style="width: 18%;">Mobile (Before &rarr; After)</th>
+                        <th style="width: 22%;">Validation & Cleaning Diffs</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for staged in page_obj %}
+                    <tr>
+                        <td class="font-monospace text-muted">{{ staged.row_number }}</td>
+                        <td>
+                            {% if staged.proposed_action == 'CREATE' %}
+                            <span class="badge bg-success-subtle text-success border border-success-subtle fw-semibold">CREATE</span>
+                            {% elif staged.proposed_action == 'UPDATE' %}
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle fw-semibold">UPDATE</span>
+                            {% elif staged.proposed_action == 'UNCHANGED' %}
+                            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle fw-semibold">UNCHANGED</span>
+                            {% else %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle fw-semibold">QUARANTINE</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if staged.validation_status == 'VALID' %}
+                            <span class="badge badge-valid"><i class="bi bi-check-circle me-1"></i>VALID</span>
+                            {% elif staged.validation_status == 'WARNING' %}
+                            <span class="badge badge-flagged"><i class="bi bi-exclamation-circle me-1"></i>WARNING</span>
+                            {% else %}
+                            <span class="badge bg-danger text-white"><i class="bi bi-x-circle me-1"></i>ERROR</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if batch.dataset_type == 'MCA' %}
+                            <strong>{{ staged.cleaned_data.name|default:"-" }}</strong>
+                            <div class="small font-monospace text-muted">{{ staged.cleaned_data.entityId }} ({{ staged.cleaned_data.entityType|upper }})</div>
+                            {% else %}
+                            <strong>{% firstof staged.cleaned_data.trade_name staged.cleaned_data.legal_name "-" %}</strong>
+                            <div class="small font-monospace text-muted">{{ staged.cleaned_data.gst_number }}</div>
+                            {% if staged.cleaned_data.pan %}
+                            <div class="small text-muted">PAN: <span class="font-monospace fw-semibold">{{ staged.cleaned_data.pan }}</span></div>
+                            {% endif %}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if batch.dataset_type == 'MCA' %}
+                            <div>{{ staged.cleaned_data.directorName|default:"-" }}</div>
+                            <small class="text-muted d-block">{{ staged.cleaned_data.directorEmail|default:staged.cleaned_data.email|default:"" }}</small>
+                            {% else %}
+                            <div>{{ staged.cleaned_data.legal_name|default:"-" }}</div>
+                            <small class="text-muted d-block">{{ staged.cleaned_data.email|default:"" }}</small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <!-- Mobile Cleaning Before/After -->
+                            <div class="small text-muted">
+                                Raw: <span class="font-monospace">{% firstof staged.cleaned_data.original_phone staged.cleaned_data.directorMobile staged.cleaned_data.mobile "-" %}</span>
+                            </div>
+                            {% if staged.cleaned_data.cleaned_phone or staged.cleaned_data.canonical_mobile %}
+                            <div class="font-monospace fw-bold text-dark my-1">
+                                Clean: {{ staged.cleaned_data.cleaned_phone|default:staged.cleaned_data.canonical_mobile|format_phone }}
+                            </div>
+                            {% else %}
+                            <div class="small text-muted fst-italic my-1">Clean: <span class="text-danger">null / blank</span></div>
+                            {% endif %}
+                            {% with pstatus=staged.cleaned_data.phone_status|default:staged.cleaned_data.phone_validity %}
+                            {% if pstatus == 'valid' or pstatus == 'VALID' %}
+                            <span class="badge badge-valid">VALID (10 DIGIT)</span>
+                            {% elif pstatus == 'cleaned' %}
+                            <span class="badge bg-info-subtle text-info border border-info-subtle">CLEANED (10 DIGIT)</span>
+                            {% elif pstatus == 'multiple_numbers_review' %}
+                            <span class="badge bg-warning-subtle text-dark border border-warning">MULTIPLE NUMBERS</span>
+                            {% elif pstatus == 'invalid' or pstatus == 'FLAGGED' %}
+                            <span class="badge badge-flagged">INVALID (STORED NULL)</span>
+                            {% else %}
+                            <span class="badge badge-blank">MISSING</span>
+                            {% endif %}
+                            {% endwith %}
+                        </td>
+                        <td class="small">
+                            {% if staged.validation_messages %}
+                            <div class="text-danger mb-1">
+                                {% for msg in staged.validation_messages %}
+                                <div><i class="bi bi-x-circle me-1"></i>{{ msg }}</div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            {% if staged.diff_summary %}
+                            <div class="text-primary small">
+                                <i class="bi bi-arrow-repeat me-1"></i>Modifies existing record attributes
+                            </div>
+                            {% elif not staged.validation_messages %}
+                            <span class="text-success"><i class="bi bi-check-all me-1"></i>All fields verified clean</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-4 text-muted">No staged candidates match the current filter.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if page_obj.has_other_pages %}
+        <div class="p-3 border-top d-flex justify-content-between align-items-center">
+            <span class="small text-muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+            <ul class="pagination pagination-sm mb-0">
+                {% if page_obj.has_previous %}
+                <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Previous</a></li>
+                {% endif %}
+                <li class="page-item active"><span class="page-link">{{ page_obj.number }}</span></li>
+                {% if page_obj.has_next %}
+                <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Next</a></li>
+                {% endif %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const publishForm = document.getElementById('publishToDbForm');
+    const publishBtn = document.getElementById('publishToDbBtn');
+    if (publishForm && publishBtn) {
+        publishForm.addEventListener('submit', (e) => {
+            if (publishBtn.dataset.submitting === 'true' || publishBtn.disabled) {
+                e.preventDefault();
+                return false;
+            }
+            if (!confirm('Approve publication and write staged candidates to the database?')) {
+                e.preventDefault();
+                return false;
+            }
+            publishBtn.dataset.submitting = 'true';
+            publishBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Publishing...';
+            setTimeout(() => {
+                publishBtn.disabled = true;
+            }, 0);
+        });
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+
+{% block title %}Upload Dataset - Import Center{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0" style="max-width: 900px;">
+    <!-- Stepper Navigation -->
+    <div class="stepper-nav">
+        <div class="stepper-step active">
+            <span class="stepper-circle">1</span>
+            <span>Upload File</span>
+        </div>
+        <div class="stepper-step">
+            <span class="stepper-circle">2</span>
+            <span>Column Mapping</span>
+        </div>
+        <div class="stepper-step">
+            <span class="stepper-circle">3</span>
+            <span>Preview & Validation</span>
+        </div>
+        <div class="stepper-step">
+            <span class="stepper-circle">4</span>
+            <span>Publish to DB</span>
+        </div>
+    </div>
+
+    <!-- Upload Card -->
+    <div class="card card-custom p-4 shadow-sm">
+        <div class="d-flex align-items-center gap-3 mb-4 pb-3 border-bottom">
+            <div class="rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;">
+                <i class="bi bi-cloud-arrow-up fs-4"></i>
+            </div>
+            <div>
+                <h5 class="fw-bold mb-0">Upload MCA or GST Dataset</h5>
+                <p class="text-muted small mb-0">Accepts CSV or Excel (.xlsx, .xls) formats. Files are securely hashed and staged.</p>
+            </div>
+        </div>
+
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <label class="form-label fw-semibold small">Dataset Destination Type</label>
+                    {{ form.dataset_type }}
+                    <small class="text-muted d-block mt-1">Select MCA (Company/LLP + Directors) or GST (Tax Registrations)</small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label fw-semibold small">Source File (.csv, .xlsx, or .xls)</label>
+                    {{ form.data_file }}
+                    <small class="text-muted d-block mt-1">Both MCA and GST accept CSV and Excel (.xlsx, .xls) files</small>
+                </div>
+            </div>
+
+            <!-- Advanced Configuration Accordion -->
+            <div class="accordion mb-4" id="advancedOptions">
+                <div class="accordion-item border-light-subtle rounded-3 overflow-hidden">
+                    <h2 class="accordion-header">
+                        <button class="accordion-button collapsed py-2 px-3 bg-light text-secondary small fw-semibold" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOptions">
+                            <i class="bi bi-gear me-2"></i> Advanced Parsing Options (Worksheet, Header Row, Delimiter)
+                        </button>
+                    </h2>
+                    <div id="collapseOptions" class="accordion-collapse collapse" data-bs-parent="#advancedOptions">
+                        <div class="accordion-body p-3">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-semibold">Excel Worksheet Name</label>
+                                    {{ form.sheet_name }}
+                                    <small class="text-muted d-block">Defaults to the first worksheet if left blank.</small>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-semibold">Header Row Index</label>
+                                    {{ form.header_row }}
+                                    <small class="text-muted d-block">Row number containing column names (1-indexed).</small>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-semibold">CSV Delimiter</label>
+                                    {{ form.csv_delimiter }}
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-semibold">Character Encoding</label>
+                                    {{ form.csv_encoding }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex align-items-center justify-content-between pt-3 border-top">
+                <a href="{% url 'hub:dashboard' %}" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-primary fw-semibold px-4 shadow-sm">
+                    Upload & Continue to Column Mapping <i class="bi bi-arrow-right ms-1"></i>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

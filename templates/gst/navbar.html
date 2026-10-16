@@ -1,0 +1,327 @@
+{% load hub_tags %}
+<!-- Dedicated GST Action Toolbar Matching Reference Image Exactly -->
+<div class="gst-navbar-wrapper mb-3">
+    <div class="d-flex align-items-center flex-wrap gap-2 py-2">
+        <!-- 1. + Import Excel / CSV (Blue Button) -->
+        <button type="button" class="btn btn-mca-blue btn-sm fw-semibold shadow-xs" data-bs-toggle="modal" data-bs-target="#gstImportModal" title="Import GST Excel or CSV">
+            <span class="fw-bold me-1">+</span>Import Excel / CSV
+        </button>
+
+        <!-- 2. + New Row (White Button) -->
+        <button type="button" class="btn btn-mca-white btn-sm fw-semibold shadow-xs" data-bs-toggle="modal" data-bs-target="#gstAddModal" title="Add a new GST row">
+            <span class="fw-bold me-1">+</span>New Row
+        </button>
+
+        <!-- 3. Restore JSON (White Button) -->
+        <button type="button" class="btn btn-mca-white btn-sm fw-semibold shadow-xs" data-bs-toggle="modal" data-bs-target="#gstRestoreJsonModal" title="Restore GST records from JSON">
+            Restore JSON
+        </button>
+
+        <!-- 4. Backup JSON (White Button) -->
+        <a href="{% url 'hub:gst_export_json' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}" class="btn btn-mca-white btn-sm fw-semibold shadow-xs" title="Backup GST records as JSON">
+            Backup JSON
+        </a>
+
+        <!-- 5. Export CSV (White Button) -->
+        <a href="{% url 'hub:gst_export_csv' %}?scope=filtered{% if request.GET.urlencode %}&{{ request.GET.urlencode }}{% endif %}" class="btn btn-mca-white btn-sm fw-semibold shadow-xs" title="Export currently filtered GST records to CSV">
+            Export CSV
+        </a>
+
+        <!-- 6. Export Excel (White Button) -->
+        <a href="{% url 'hub:gst_export_excel' %}?scope=filtered{% if request.GET.urlencode %}&{{ request.GET.urlencode }}{% endif %}" 
+           class="btn btn-mca-white btn-sm fw-semibold shadow-xs btn-export-excel" 
+           id="gstExportExcelBtn"
+           data-module="gst"
+           data-count="{{ total_count|default:0 }}"
+           title="Export currently filtered GST records to Excel">
+            <i class="bi bi-file-earmark-excel me-1 text-success export-icon"></i>
+            <span class="export-btn-text">Export filtered Excel ({{ total_count|default:0 }} record{{ total_count|default:0|pluralize }})</span>
+        </a>
+
+        {% if request.user.is_superuser %}
+            {# Clear All GST Data (Admin Only, Disabled when 0 records) #}
+            {% if total_gst_records > 0 or has_gst_records %}
+            <button type="button" class="btn btn-mca-red btn-sm fw-semibold shadow-xs text-white" data-bs-toggle="modal" data-bs-target="#clearGstModal" id="openClearGstModalBtn" title="Clear all GST data from the database">
+                <i class="bi bi-trash3-fill me-1"></i>Clear All GST Data
+            </button>
+            {% else %}
+            <button type="button" class="btn btn-mca-red btn-sm fw-semibold shadow-xs text-white disabled opacity-50" id="openClearGstModalBtn" title="No GST records exist to clear" disabled aria-disabled="true">
+                <i class="bi bi-trash3 me-1"></i>Clear All GST Data
+            </button>
+            {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: Import Excel / CSV for GST -->
+<!-- ======================================================== -->
+<div class="modal fade" id="gstImportModal" tabindex="-1" aria-labelledby="gstImportModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-primary text-white">
+                <h6 class="modal-title fw-bold" id="gstImportModalLabel">
+                    <i class="bi bi-file-earmark-spreadsheet me-2"></i>Import GST Dataset (Excel / CSV)
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'hub:gst_upload' %}" method="post" enctype="multipart/form-data" id="gstExcelImportForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <div class="alert alert-info border-info-subtle small py-2 px-3 mb-3 d-flex align-items-center gap-2">
+                        <i class="bi bi-info-circle-fill fs-5"></i>
+                        <span>Upload GST registration datasets (.xlsx, .xls, or .csv). Headers and phone cleaning are validated automatically.</span>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="gstModalFileInput" class="form-label fw-semibold small">Choose GST File (.xlsx, .xls, .csv)</label>
+                        <input class="form-control" type="file" id="gstModalFileInput" name="data_file" accept=".xlsx,.xls,.csv" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="gstModalSheetName" class="form-label fw-semibold small text-muted">Sheet Name (Optional for Excel)</label>
+                        <input type="text" class="form-control form-control-sm" id="gstModalSheetName" name="sheet_name" placeholder="Leave blank for first sheet">
+                    </div>
+
+                    <!-- Progress bar -->
+                    <div class="progress d-none mt-3" id="gstImportProgress" style="height: 6px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" role="progressbar" style="width: 100%"></div>
+                    </div>
+                    <div class="small text-muted mt-1 d-none" id="gstImportProgressText">Validating and uploading file...</div>
+                </div>
+                <div class="modal-footer bg-light-subtle">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm fw-semibold" id="gstImportSubmitBtn">
+                        <i class="bi bi-cloud-arrow-up-fill me-1"></i>Upload & Process
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: Restore JSON for GST -->
+<!-- ======================================================== -->
+<div class="modal fade" id="gstRestoreJsonModal" tabindex="-1" aria-labelledby="gstRestoreJsonModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-dark text-white">
+                <h6 class="modal-title fw-bold" id="gstRestoreJsonModalLabel">
+                    <i class="bi bi-filetype-json me-2 text-warning"></i>Restore GST JSON
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'hub:gst_import_json' %}" method="post" enctype="multipart/form-data" id="gstJsonRestoreForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <p class="text-muted small mb-3">Upload a JSON backup of GST records to restore. Supports fields: <code>gst_number</code>, <code>legal_name</code>, <code>trade_name</code>, <code>pan</code>, <code>mobile</code>, <code>email</code>, <code>address</code>, <code>city</code>, <code>state</code>, etc.</p>
+
+                    <div class="mb-3">
+                        <label for="gstRestoreJsonFileInput" class="form-label fw-semibold small">Choose JSON Backup File (.json)</label>
+                        <input class="form-control" type="file" id="gstRestoreJsonFileInput" name="json_file" accept=".json,application/json" required>
+                    </div>
+
+                    <!-- Progress -->
+                    <div class="progress d-none mt-3" id="gstRestoreJsonProgress" style="height: 6px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-info" role="progressbar" style="width: 100%"></div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light-subtle">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm fw-semibold" id="gstRestoreJsonSubmitBtn">
+                        <i class="bi bi-upload me-1"></i>Restore Records
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: + New Row (Create GST Record) -->
+<!-- ======================================================== -->
+<div class="modal fade" id="gstAddModal" tabindex="-1" aria-labelledby="gstAddModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-primary text-white">
+                <h6 class="modal-title fw-bold" id="gstAddModalLabel">
+                    <i class="bi bi-plus-circle me-2"></i>Add New GST Row
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{% url 'hub:gst_create' %}" method="post" id="gstAddForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">GSTIN (15-Character GST Number) <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control form-control-sm font-monospace text-uppercase" name="gst_number" required placeholder="e.g. 27ABCDE1234F1Z5">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">PAN (Permanent Account Number)</label>
+                            <input type="text" class="form-control form-control-sm font-monospace text-uppercase" name="pan" placeholder="e.g. ABCDE1234F">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">Legal Name</label>
+                            <input type="text" class="form-control form-control-sm" name="legal_name" placeholder="Legal registered entity name">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">Trade Name</label>
+                            <input type="text" class="form-control form-control-sm" name="trade_name" placeholder="Brand / Operating trade name">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Primary Mobile</label>
+                            <input type="text" class="form-control form-control-sm" name="mobile" placeholder="10-digit mobile number">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Email Address</label>
+                            <input type="email" class="form-control form-control-sm" name="email" placeholder="contact@business.in">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Status</label>
+                            <select class="form-select form-select-sm" name="status">
+                                <option value="ACT" selected>Active (ACT)</option>
+                                <option value="CNL">Cancelled (CNL)</option>
+                                <option value="SUS">Suspended (SUS)</option>
+                                <option value="PROV">Provisional (PROV)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">State</label>
+                            <input type="text" class="form-control form-control-sm" name="state" placeholder="e.g. Maharashtra">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">City / District</label>
+                            <input type="text" class="form-control form-control-sm" name="city" placeholder="e.g. Mumbai">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold small">Pincode</label>
+                            <input type="text" class="form-control form-control-sm" name="pincode" placeholder="e.g. 400051">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">Registration Date</label>
+                            <input type="date" class="form-control form-control-sm" name="registration_date">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small">Jurisdiction</label>
+                            <input type="text" class="form-control form-control-sm" name="jurisdiction" placeholder="e.g. Ward 1, Range II">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold small">Principal Address</label>
+                            <textarea class="form-control form-control-sm" name="address" rows="2" placeholder="Complete principal business address"></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light-subtle">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm fw-semibold">
+                        <i class="bi bi-check-lg me-1"></i>Save Row
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Excel import form spinner feedback
+    const excelForm = document.getElementById('gstExcelImportForm');
+    const excelProgress = document.getElementById('gstImportProgress');
+    const excelText = document.getElementById('gstImportProgressText');
+    const excelSubmit = document.getElementById('gstImportSubmitBtn');
+    if (excelForm && excelSubmit) {
+        excelForm.addEventListener('submit', (e) => {
+            if (excelSubmit.dataset.submitting === 'true' || excelSubmit.disabled) {
+                e.preventDefault();
+                return false;
+            }
+            excelSubmit.dataset.submitting = 'true';
+            if (excelProgress) excelProgress.classList.remove('d-none');
+            if (excelText) excelText.classList.remove('d-none');
+            excelSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Uploading...';
+            setTimeout(() => {
+                excelSubmit.disabled = true;
+            }, 0);
+        });
+    }
+
+    // JSON restore spinner feedback
+    const jsonForm = document.getElementById('gstJsonRestoreForm');
+    const jsonProgress = document.getElementById('gstRestoreJsonProgress');
+    const jsonSubmit = document.getElementById('gstRestoreJsonSubmitBtn');
+    if (jsonForm) {
+        jsonForm.addEventListener('submit', () => {
+            if (jsonProgress) jsonProgress.classList.remove('d-none');
+            if (jsonSubmit) {
+                jsonSubmit.disabled = true;
+                jsonSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Restoring...';
+            }
+        });
+    }
+});
+</script>
+
+{% if request.user.is_superuser %}
+{# Modal & script for Clear All GST Data #}
+<div class="modal fade" id="clearGstModal" tabindex="-1" aria-labelledby="clearGstModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-danger text-white">
+                <h6 class="modal-title fw-bold" id="clearGstModalLabel">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Clear all GST data?
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" id="clearGstCloseX"></button>
+            </div>
+            <form action="{% url 'hub:gst_clear_all' %}" method="post" id="clearGstForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <div class="alert alert-danger border-danger-subtle small py-2 px-3 mb-3 d-flex align-items-start gap-2">
+                        <i class="bi bi-shield-fill-x fs-5 text-danger flex-shrink-0"></i>
+                        <div>
+                            <strong>Destructive Operation:</strong> This will permanently remove all GST records from the database. MCA data will not be affected. This action cannot be undone.
+                        </div>
+                    </div>
+                    <p class="text-secondary small mb-0">
+                        This will permanently remove all GST records from the database. MCA data will not be affected. This action cannot be undone.
+                    </p>
+                </div>
+                <div class="modal-footer bg-light-subtle d-flex justify-content-between">
+                    <button type="button" class="btn btn-secondary btn-sm px-3 fw-semibold" data-bs-dismiss="modal" id="cancelClearGstBtn">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn btn-danger btn-sm px-4 fw-semibold" id="confirmClearGstBtn">
+                        <i class="bi bi-trash3-fill me-1"></i>Clear All GST Data
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const clearGstForm = document.getElementById('clearGstForm');
+    const confirmClearGstBtn = document.getElementById('confirmClearGstBtn');
+    const cancelClearGstBtn = document.getElementById('cancelClearGstBtn');
+    const clearGstCloseX = document.getElementById('clearGstCloseX');
+
+    if (clearGstForm && confirmClearGstBtn) {
+        clearGstForm.addEventListener('submit', function(e) {
+            if (confirmClearGstBtn.dataset.submitting === 'true' || confirmClearGstBtn.disabled) {
+                e.preventDefault();
+                return false;
+            }
+            confirmClearGstBtn.dataset.submitting = 'true';
+            confirmClearGstBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Clearing...';
+            setTimeout(() => {
+                confirmClearGstBtn.disabled = true;
+                if (cancelClearGstBtn) cancelClearGstBtn.disabled = true;
+                if (clearGstCloseX) clearGstCloseX.disabled = true;
+            }, 0);
+        });
+    }
+});
+</script>
+{% endif %}
