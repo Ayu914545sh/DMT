@@ -4813,3 +4813,13 @@ class LiveProgressWorkflowTestCase(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'import/progress.html')
+
+    def test_healthcheck_endpoint(self):
+        response = self.client.get('/health/')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data.get('status'), 'healthy')
+        self.assertEqual(data.get('database'), 'ok')
+
+        resp2 = self.client.get('/healthz')
+        self.assertEqual(resp2.status_code, 200)

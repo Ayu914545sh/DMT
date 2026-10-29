@@ -56,6 +56,12 @@ services:
     volumes:
       - static_data:/app/staticfiles
       - media_data:/app/media
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,11 +105,14 @@ services:
       dockerfile: Dockerfile
     image: dmt-nginx:local
     restart: always
+    expose:
+      - "80"
     volumes:
       - static_data:/app/staticfiles:ro
       - media_data:/app/media:ro
     depends_on:
-      - web
+      web:
+        condition: service_healthy
     networks:
       - app_network
 

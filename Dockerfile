@@ -28,4 +28,7 @@ RUN python manage.py collectstatic --noinput || true
 
 EXPOSE 8000
 
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health/ || exit 1
+
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "dmt_project.wsgi:application"]
