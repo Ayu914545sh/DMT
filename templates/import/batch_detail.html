@@ -64,6 +64,111 @@
         </div>
     </div>
 
+    <!-- Standard Deliverables & Outputs (Requirement 8 A-E) -->
+    <div class="card card-custom p-4 mb-4 bg-white shadow-sm border-start border-4 border-primary">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-3">
+            <div>
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-box-arrow-down text-primary fs-4"></i>
+                    <h5 class="fw-bold mb-0">Standard Deliverables & Outputs</h5>
+                </div>
+                <p class="text-muted small mb-0 mt-1">Download clean operational data products, telephony-ready calling lists, or audit logs for compliance.</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <!-- Output A: Cleaned Master Data -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_cleaned_master' batch.batch_id %}?format=CSV" class="btn btn-outline-success btn-sm fw-semibold">
+                        <i class="bi bi-file-earmark-text me-1"></i> A. Master Data
+                    </a>
+                    <button type="button" class="btn btn-outline-success btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_cleaned_master' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>Download as CSV</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_cleaned_master' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Download as Excel (.xlsx)</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#customizeExportModal"><i class="bi bi-sliders me-2"></i>Customize Export Columns...</button></li>
+                    </ul>
+                </div>
+
+                <!-- Output B: Ready-to-Call List -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_ready_to_call' batch.batch_id %}?format=CSV" class="btn btn-primary btn-sm fw-semibold shadow-sm">
+                        <i class="bi bi-telephone-outbound me-1"></i> B. Ready-to-Call List
+                    </a>
+                    <button type="button" class="btn btn-primary btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_ready_to_call' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>CSV (1 row per valid phone)</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_ready_to_call' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Excel (.xlsx)</a></li>
+                    </ul>
+                </div>
+
+                <!-- Output C: Review Report -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_review_report' batch.batch_id %}?format=CSV" class="btn btn-outline-warning text-dark btn-sm fw-semibold">
+                        <i class="bi bi-exclamation-triangle me-1"></i> C. Review Report
+                    </a>
+                    <button type="button" class="btn btn-outline-warning text-dark btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_review_report' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>CSV</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_review_report' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Excel (.xlsx)</a></li>
+                    </ul>
+                </div>
+
+                <!-- Output D: Audit Output -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_audit_output' batch.batch_id %}?format=CSV" class="btn btn-outline-secondary btn-sm fw-semibold">
+                        <i class="bi bi-clock-history me-1"></i> D. Audit Trace
+                    </a>
+                    <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_audit_output' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>CSV</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_audit_output' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Excel (.xlsx)</a></li>
+                    </ul>
+                </div>
+
+                <!-- Output E: Summary Stats -->
+                <a href="{% url 'hub:download_processing_summary' batch.batch_id %}?format=JSON" target="_blank" class="btn btn-outline-info text-dark btn-sm fw-semibold">
+                    <i class="bi bi-pie-chart me-1"></i> E. Summary Stats
+                </a>
+            </div>
+        </div>
+
+        {% if batch.cleaning_summary %}
+        <div class="row g-2 pt-2 border-top">
+            <div class="col-md-3">
+                <div class="p-2 bg-light rounded text-center">
+                    <small class="text-muted d-block">Distinct Companies</small>
+                    <strong class="text-dark">{{ batch.cleaning_summary.unique_companies|default:"-" }}</strong>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="p-2 bg-light rounded text-center">
+                    <small class="text-muted d-block">Distinct Contacts / Directors</small>
+                    <strong class="text-dark">{{ batch.cleaning_summary.unique_contacts|default:"-" }}</strong>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="p-2 bg-light rounded text-center">
+                    <small class="text-muted d-block">Unique Cleaned Phones</small>
+                    <strong class="text-success">{{ batch.cleaning_summary.unique_valid_phones|default:"-" }}</strong>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="p-2 bg-light rounded text-center">
+                    <small class="text-muted d-block">Shared Numbers</small>
+                    <strong class="text-primary">{{ batch.cleaning_summary.shared_phones|default:"0" }}</strong>
+                </div>
+            </div>
+            {% if batch.cleaning_summary.multiplicity_explanation %}
+            <div class="col-12 mt-2">
+                <div class="alert alert-light border small text-muted mb-0 py-2">
+                    <i class="bi bi-info-circle me-1 text-primary"></i> <strong>Multiplicity Insight:</strong> {{ batch.cleaning_summary.multiplicity_explanation }}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
     <!-- Associated Quality Issues Section -->
     {% if quality_issues %}
     <div class="card card-custom mb-4 shadow-sm border-warning border-opacity-50">
@@ -174,12 +279,13 @@
                             {% firstof staged.cleaned_data.original_phone staged.cleaned_data.directorMobile staged.cleaned_data.mobile "-" %}
                         </td>
                         <td>
-                            {% if staged.cleaned_data.cleaned_phone or staged.cleaned_data.canonical_mobile %}
+                            {% firstof staged.cleaned_data.cleaned_phone staged.cleaned_data.canonical_mobile as clean_phone %}
+                            {% if clean_phone %}
                             <div class="font-monospace fw-bold text-dark mb-1">
-                                {{ staged.cleaned_data.cleaned_phone|default:staged.cleaned_data.canonical_mobile|format_phone }}
+                                {{ clean_phone|format_phone }}
                             </div>
                             {% endif %}
-                            {% with pstatus=staged.cleaned_data.phone_status|default:staged.cleaned_data.phone_validity %}
+                            {% firstof staged.cleaned_data.phone_status staged.cleaned_data.phone_validity as pstatus %}
                             {% if pstatus == 'valid' or pstatus == 'VALID' %}
                             <span class="badge badge-valid">VALID</span>
                             {% elif pstatus == 'cleaned' %}
@@ -191,7 +297,6 @@
                             {% else %}
                             <span class="badge badge-blank">MISSING</span>
                             {% endif %}
-                            {% endwith %}
                         </td>
                         <td>
                             {% if staged.cleaned_data.phone_validity == 'VALID' %}
@@ -230,5 +335,97 @@
         </div>
         {% endif %}
     </div>
+<!-- Modal: Customize Export Columns -->
+<div class="modal fade" id="customizeExportModal" tabindex="-1" aria-labelledby="customizeExportModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header bg-light">
+                <h6 class="modal-title fw-bold" id="customizeExportModalLabel">
+                    <i class="bi bi-sliders me-2 text-success"></i>Customize Export Columns
+                </h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+                <p class="small text-muted mb-3">
+                    Select columns to include in your download. By default, columns selected during import are included. Excluded source columns are omitted.
+                </p>
+                <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom">
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2 small" id="exportSelectAllBtn">Select All</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 small" id="exportClearAllBtn">Clear Optional</button>
+                    </div>
+                    <span class="small text-muted">Checkboxes customize download</span>
+                </div>
+                <div class="row g-2 mb-3" style="max-height: 240px; overflow-y: auto;">
+                    {% for col in export_columns_list %}
+                    <div class="col-6">
+                        <div class="form-check">
+                            <input class="form-check-input export-col-cb" type="checkbox" value="{{ col.title }}" id="exp_col_{{ forloop.counter }}" checked>
+                            <label class="form-check-label small" for="exp_col_{{ forloop.counter }}">
+                                {{ col.title }}
+                            </label>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small fw-semibold">Export File Format</label>
+                    <select id="exportFormatSelect" class="form-select form-select-sm">
+                        <option value="CSV" selected>CSV (Comma Separated Values)</option>
+                        <option value="XLSX">Excel Spreadsheet (.xlsx)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer bg-light py-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-success fw-semibold" id="confirmCustomExportBtn">
+                    <i class="bi bi-download me-1"></i>Download Export
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const exportSelectAllBtn = document.getElementById('exportSelectAllBtn');
+    const exportClearAllBtn = document.getElementById('exportClearAllBtn');
+    const exportCheckboxes = document.querySelectorAll('.export-col-cb');
+    const confirmCustomExportBtn = document.getElementById('confirmCustomExportBtn');
+    const exportFormatSelect = document.getElementById('exportFormatSelect');
+
+    if (exportSelectAllBtn) {
+        exportSelectAllBtn.addEventListener('click', () => {
+            exportCheckboxes.forEach(cb => cb.checked = true);
+        });
+    }
+    if (exportClearAllBtn) {
+        exportClearAllBtn.addEventListener('click', () => {
+            exportCheckboxes.forEach((cb, idx) => {
+                if (idx > 0) cb.checked = false;
+            });
+        });
+    }
+    if (confirmCustomExportBtn) {
+        confirmCustomExportBtn.addEventListener('click', () => {
+            const chosen = [];
+            exportCheckboxes.forEach(cb => {
+                if (cb.checked) chosen.push(cb.value);
+            });
+            if (chosen.length === 0) {
+                alert('Please select at least one column to export.');
+                return;
+            }
+            const fmt = exportFormatSelect ? exportFormatSelect.value : 'CSV';
+            const url = "{% url 'hub:download_cleaned_master' batch.batch_id %}?format=" + encodeURIComponent(fmt) + "&columns=" + encodeURIComponent(chosen.join(','));
+            window.location.href = url;
+            const modalEl = document.getElementById('customizeExportModal');
+            if (modalEl && typeof bootstrap !== 'undefined') {
+                const modalInstance = bootstrap.Modal.getInstance(modalEl);
+                if (modalInstance) modalInstance.hide();
+            }
+        });
+    }
+});
+</script>
 {% endblock %}

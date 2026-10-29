@@ -8,7 +8,7 @@ import re
 import math
 import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Dict, List
 
 
 def clean_mobile(raw_number: Any, strict_prefix: bool = True) -> Tuple[Optional[str], str, Optional[str]]:
@@ -119,6 +119,10 @@ def clean_mobile(raw_number: Any, strict_prefix: bool = True) -> Tuple[Optional[
     if candidate[0] not in ('6', '7', '8', '9'):
         return None, 'invalid', f'Phone number must start with 6, 7, 8, or 9 (starts with {candidate[0]})'
 
+    # Check for dummy/repetitive number (e.g. 9999999999, 8888888888, 7777777777)
+    if re.match(r'^(\d)\1{9}$', candidate):
+        return candidate, 'FLAGGED', f'Dummy or repetitive phone number ({trimmed})'
+
     # Determine status: 'valid' if already pristine 10 digits starting with 6-9 without modification, else 'cleaned'
     if not was_modified and trimmed == candidate:
         status = 'valid'
@@ -126,6 +130,114 @@ def clean_mobile(raw_number: Any, strict_prefix: bool = True) -> Tuple[Optional[
         status = 'cleaned'
 
     return candidate, status, None
+
+
+def clean_phone_extended(raw_number: Any, strict_prefix: bool = True, default_ownership: str = 'unknown') -> Dict[str, Any]:
+    """
+    Comprehensive phone normalization adhering to Requirement 5:
+    - Preserves original exact value.
+    - Extracts extensions (e.g. ext 102, x45).
+    - Safely splits multiple numbers without breaking formatting or country codes.
+    - Normalizes Indian mobile (+91, 0091, 91, 0) and identifies landlines / international numbers.
+    - Assigns ownership ('director', 'company', or 'unknown').
+    - Returns rich dictionary for audit, caller list deduplication, and quality inbox.
+    """
+    raw_text = str(raw_number).strip() if raw_number is not None else ""
+    if isinstance(raw_number, float) and (math.isnan(raw_number) or math.isinf(raw_number)):
+        raw_text = ""
+    elif isinstance(raw_number, float) and raw_number.is_integer():
+        raw_text = str(int(raw_number))
+
+    res = {
+        'raw_value': raw_text,
+        'primary_phone': None,
+        'secondary_phones': [],
+        'extension': "",
+        'status': 'missing',
+        'phone_validity': 'missing',
+        'phone_type': 'missing',
+        'ownership': default_ownership,
+        'error_reason': None
+    }
+
+    if not raw_text or raw_text.lower() in ('nan', 'none', 'null', 'na', '-', 'nil', 'n/a'):
+        res['error_reason'] = 'Value is blank or null'
+        return res
+
+    working = raw_text
+
+    # 1. Extract extensions if present (e.g. ext 102, extn 45, x102, #45)
+    ext_match = re.search(r'(?:ext(?:n|ension)?|[#x])\s*[:.]?\s*(\d{1,6})\b', working, flags=re.IGNORECASE)
+    if ext_match:
+        res['extension'] = ext_match.group(1)
+        working = working[:ext_match.start()] + working[ext_match.end():]
+        working = working.strip()
+
+    # 2. Check for multiple numbers using delimiters
+    parts = re.split(r'[/;,|]|\b(?:or|and|&)\b', working, flags=re.IGNORECASE)
+    parts = [p.strip() for p in parts if p.strip()]
+
+    valid_mobiles = []
+    flagged_mobiles = []
+    other_numbers = []
+    reasons = []
+
+    for part in parts:
+        cleaned_part, part_status, part_reason = clean_mobile(part, strict_prefix=strict_prefix)
+        if cleaned_part and part_status in ('valid', 'cleaned'):
+            valid_mobiles.append((cleaned_part, part_status))
+        elif cleaned_part and part_status == 'FLAGGED':
+            flagged_mobiles.append((cleaned_part, part_reason))
+        else:
+            # Check if landline (starts with 0 or 1-5, 8-11 digits)
+            digits = re.sub(r'\D', '', part)
+            if digits.startswith('91') and len(digits) >= 12:
+                digits = digits[2:]
+            
+            if (len(digits) in (10, 11) and digits.startswith('0')) or (len(digits) in (8, 9, 10) and digits[0] in ('1', '2', '3', '4', '5')):
+                other_numbers.append(('landline', digits))
+            elif digits:
+                other_numbers.append(('invalid', digits))
+            if part_reason:
+                reasons.append(part_reason)
+
+    if len(valid_mobiles) == 1 and len(parts) == 1 and not flagged_mobiles:
+        num, stat = valid_mobiles[0]
+        res['primary_phone'] = num
+        res['status'] = stat
+        res['phone_validity'] = stat
+        res['phone_type'] = 'mobile'
+    elif flagged_mobiles and not valid_mobiles:
+        num, reason = flagged_mobiles[0]
+        res['primary_phone'] = num
+        res['status'] = 'FLAGGED'
+        res['phone_validity'] = 'FLAGGED'
+        res['phone_type'] = 'mobile'
+        res['error_reason'] = reason
+    elif len(valid_mobiles) >= 1:
+        res['primary_phone'] = valid_mobiles[0][0]
+        res['secondary_phones'] = [m[0] for m in valid_mobiles[1:]] + [num for _, num in other_numbers]
+        res['status'] = 'multiple_numbers_review'
+        res['phone_validity'] = 'multiple_numbers_review'
+        res['phone_type'] = 'mobile'
+        res['error_reason'] = f"Multiple phone numbers present ({raw_text})"
+    elif other_numbers:
+        first_type, first_num = other_numbers[0]
+        res['primary_phone'] = first_num if first_type == 'landline' else None
+        res['secondary_phones'] = [num for _, num in other_numbers[1:]]
+        res['status'] = 'landline' if first_type == 'landline' else 'invalid'
+        res['phone_validity'] = res['status']
+        res['phone_type'] = first_type
+        if first_type == 'landline':
+            res['ownership'] = 'company'
+        res['error_reason'] = reasons[0] if reasons else f"Invalid phone format ({raw_text})"
+    else:
+        res['status'] = 'invalid'
+        res['phone_validity'] = 'invalid'
+        res['phone_type'] = 'invalid'
+        res['error_reason'] = reasons[0] if reasons else f"Invalid phone format ({raw_text})"
+
+    return res
 
 
 def clean_date(raw_date: Any, preferred_format: Optional[str] = None) -> Tuple[Optional[datetime.date], bool, Optional[str]]:

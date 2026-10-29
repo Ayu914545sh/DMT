@@ -13,7 +13,7 @@ import datetime
 from django.shortcuts import render, redirect, get_object_or_404
 from django.template.loader import render_to_string
 from django.urls import reverse
-from django.http import HttpResponse, JsonResponse, Http404
+from django.http import HttpResponse, JsonResponse, Http404, FileResponse
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -46,7 +46,16 @@ from .forms import (
     DatasetUploadForm, MCACompanyForm, MCADirectorForm,
     GSTRecordForm, ExportRequestForm, AdminPasswordChangeForm
 )
-from .exporters import run_export_job, export_mca_dataset, export_gst_dataset
+from .exporters import (
+    run_export_job, export_mca_dataset, export_gst_dataset,
+    export_cleaned_master_data, export_ready_to_call_list,
+    export_review_report, export_audit_output, export_processing_summary
+)
+from .progress import (
+    init_progress, update_progress, get_progress, request_cancel,
+    start_background_staging_job, start_background_publication_job,
+    count_file_rows_bounded
+)
 
 
 # ==========================================
@@ -144,7 +153,10 @@ def dashboard_view(request):
 def import_upload_view(request):
     """
     Step 1: Upload dataset (CSV or XLSX) with sheet/encoding options.
+    Supports real-time upload progress tracking and schema validation.
     """
+    is_ajax = request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', '')
+
     if request.method == 'POST':
         form = DatasetUploadForm(request.POST, request.FILES)
         if form.is_valid():
@@ -158,12 +170,19 @@ def import_upload_view(request):
 
             # Empty file validation (0 bytes)
             if uploaded_file.size == 0:
-                messages.error(request, "The selected file is empty (0 bytes). Please upload a valid dataset file.")
+                err = "The selected file is empty (0 bytes). Please upload a valid dataset file."
+                if is_ajax:
+                    return JsonResponse({'success': False, 'message': err}, status=400)
+                messages.error(request, err)
                 return render(request, 'import/upload.html', {'form': form})
 
-            # Maximum file size validation (50 MB)
-            if uploaded_file.size > 50 * 1024 * 1024:
-                messages.error(request, "File size exceeds 50 MB limit. Please upload a smaller file.")
+            # Maximum file size validation (1 GB = 1024 MB)
+            max_bytes = getattr(settings, 'MAX_UPLOAD_SIZE', 1024 * 1024 * 1024)
+            if uploaded_file.size > max_bytes:
+                err = "File size exceeds 1 GB limit. Please upload a file smaller than 1 GB."
+                if is_ajax:
+                    return JsonResponse({'success': False, 'message': err}, status=400)
+                messages.error(request, err)
                 return render(request, 'import/upload.html', {'form': form})
             
             # Save uploaded file to private media directory
@@ -179,7 +198,10 @@ def import_upload_view(request):
                     for chunk in uploaded_file.chunks():
                         destination.write(chunk)
             except Exception as e:
-                messages.error(request, f"Failed to save uploaded file: {str(e)}")
+                err = f"Failed to save uploaded file: {str(e)}"
+                if is_ajax:
+                    return JsonResponse({'success': False, 'message': err}, status=500)
+                messages.error(request, err)
                 return render(request, 'import/upload.html', {'form': form})
                     
             checksum = calculate_file_checksum(saved_path)
@@ -198,12 +220,18 @@ def import_upload_view(request):
                     if not test_rows or all(not any(cell is not None and str(cell).strip() for cell in r) for r in test_rows):
                         if os.path.exists(saved_path):
                             os.remove(saved_path)
-                        messages.error(request, "The uploaded Excel file contains no readable data or rows.")
+                        err = "The uploaded Excel file contains no readable data or rows."
+                        if is_ajax:
+                            return JsonResponse({'success': False, 'message': err}, status=400)
+                        messages.error(request, err)
                         return render(request, 'import/upload.html', {'form': form})
                 except Exception as e:
                     if os.path.exists(saved_path):
                         os.remove(saved_path)
-                    messages.error(request, f"Corrupted or invalid Excel file. The file could not be parsed: {str(e)}")
+                    err = f"Corrupted or invalid Excel file. The file could not be parsed: {str(e)}"
+                    if is_ajax:
+                        return JsonResponse({'success': False, 'message': err}, status=400)
+                    messages.error(request, err)
                     return render(request, 'import/upload.html', {'form': form})
                     
             # Auto-detect delimiter and encoding for CSV if default
@@ -224,12 +252,18 @@ def import_upload_view(request):
                     if not test_rows or all(not any(str(cell).strip() for cell in r) for r in test_rows):
                         if os.path.exists(saved_path):
                             os.remove(saved_path)
-                        messages.error(request, "The uploaded CSV file contains no readable data or rows.")
+                        err = "The uploaded CSV file contains no readable data or rows."
+                        if is_ajax:
+                            return JsonResponse({'success': False, 'message': err}, status=400)
+                        messages.error(request, err)
                         return render(request, 'import/upload.html', {'form': form})
                 except Exception as e:
                     if os.path.exists(saved_path):
                         os.remove(saved_path)
-                    messages.error(request, f"Corrupted or invalid CSV file: {str(e)}")
+                    err = f"Corrupted or invalid CSV file: {str(e)}"
+                    if is_ajax:
+                        return JsonResponse({'success': False, 'message': err}, status=400)
+                    messages.error(request, err)
                     return render(request, 'import/upload.html', {'form': form})
 
             # If user left default header row (1) or not specified, auto-detect header row
@@ -254,7 +288,10 @@ def import_upload_view(request):
             if not headers:
                 if os.path.exists(saved_path):
                     os.remove(saved_path)
-                messages.error(request, "Could not detect headers in file. Please ensure row 1 (or the detected header row) contains column names.")
+                err = "Could not detect headers in file. Please ensure row 1 (or the detected header row) contains column names."
+                if is_ajax:
+                    return JsonResponse({'success': False, 'message': err}, status=400)
+                messages.error(request, err)
                 return render(request, 'import/upload.html', {'form': form})
 
             # Enforce schema isolation
@@ -262,20 +299,24 @@ def import_upload_view(request):
             if dataset_type == 'GST' and detected_type == 'MCA':
                 if os.path.exists(saved_path):
                     os.remove(saved_path)
-                messages.error(
-                    request,
+                err = (
                     "MCA file detected: The uploaded file contains MCA corporate columns (CIN, ROC, Director) "
                     "and cannot be imported into the GST module. Please upload a valid GST registration file or use the MCA Import module."
                 )
+                if is_ajax:
+                    return JsonResponse({'success': False, 'message': err}, status=400)
+                messages.error(request, err)
                 return render(request, 'import/upload.html', {'form': form})
             elif dataset_type == 'MCA' and detected_type == 'GST':
                 if os.path.exists(saved_path):
                     os.remove(saved_path)
-                messages.error(
-                    request,
+                err = (
                     "GST file detected: The uploaded file contains GST registration columns (GSTIN, Trade Name) "
                     "and cannot be imported into the MCA module. Please upload a valid MCA file or use the GST Import module."
                 )
+                if is_ajax:
+                    return JsonResponse({'success': False, 'message': err}, status=400)
+                messages.error(request, err)
                 return render(request, 'import/upload.html', {'form': form})
 
             batch_id = f"BATCH-{timestamp}-{checksum[:8].upper()}"
@@ -307,24 +348,80 @@ def import_upload_view(request):
                 object_repr=f"Uploaded file {uploaded_file.name} for {dataset_type}",
                 changes={'file_size': uploaded_file.size, 'checksum': checksum}
             )
+
+            # Initialize stage: Waiting for column mapping
+            init_progress(
+                batch_id=batch.batch_id,
+                dataset_type=dataset_type,
+                stage='Waiting for column mapping'
+            )
             
+            if is_ajax:
+                return JsonResponse({
+                    'success': True,
+                    'redirect_url': reverse('hub:import_map', kwargs={'batch_id': batch.batch_id}),
+                    'batch_id': batch.batch_id
+                })
+
             return redirect('hub:import_map', batch_id=batch.batch_id)
         else:
+            first_err = "Please correct errors below."
             for field, err_list in form.errors.items():
                 for err in err_list:
-                    messages.error(request, f"{field.replace('_', ' ').capitalize()}: {err}")
+                    first_err = f"{field.replace('_', ' ').capitalize()}: {err}"
+                    messages.error(request, first_err)
+            if is_ajax:
+                return JsonResponse({'success': False, 'message': first_err}, status=400)
     else:
         form = DatasetUploadForm()
         
     return render(request, 'import/upload.html', {'form': form})
 
 
+def _build_column_items(headers, column_samples, mapping, selected_columns, dataset_type):
+    required_target = 'entityId' if dataset_type == 'MCA' else 'gst_number'
+    items = []
+    for idx, h in enumerate(headers):
+        cur_mapped = mapping.get(h, '')
+        is_required = (cur_mapped == required_target) or (dataset_type == 'MCA' and cur_mapped in ('entityId', 'cin')) or (dataset_type == 'GST' and cur_mapped in ('gst_number', 'gstin'))
+        is_skip = (cur_mapped == 'skip')
+        if selected_columns is not None:
+            is_selected = (h in selected_columns) or is_required
+        else:
+            if is_required:
+                is_selected = True
+            elif is_skip:
+                is_selected = False
+            elif cur_mapped:
+                is_selected = True
+            else:
+                is_selected = False
+        items.append({
+            'id': f"col_{idx}",
+            'index': idx,
+            'header': h,
+            'samples': column_samples.get(h, []),
+            'cur_mapped': cur_mapped,
+            'is_selected': is_selected,
+            'is_required': is_required,
+            'is_skip': is_skip,
+        })
+    return items
+
+
 @login_required
 def import_map_view(request, batch_id):
     """
-    Step 2: Column mapping review and confirmation.
+    Step 2: Column mapping review and confirmation with column selection.
     """
     batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    is_ajax = request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', '')
+
+    # If job is already processing or queued, resume by redirecting to progress view
+    if batch.status in ('PROCESSING', 'QUEUED'):
+        if is_ajax:
+            return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id})})
+        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
     
     headers = read_file_headers(
         file_path=batch.file_path,
@@ -369,6 +466,8 @@ def import_map_view(request, batch_id):
     else:
         suggested_mapping = generate_suggested_mapping(headers, batch.dataset_type)
     
+    required_target = 'entityId' if batch.dataset_type == 'MCA' else 'gst_number'
+    
     if request.method == 'POST':
         # 1. Switch Excel worksheet if requested
         if 'switch_sheet' in request.POST and batch.status != 'COMPLETED':
@@ -382,6 +481,8 @@ def import_map_view(request, batch_id):
                 )
                 batch.mapping_config['sheet_name'] = new_sheet
                 batch.mapping_config.pop('columns', None)
+                batch.mapping_config.pop('selected_columns', None)
+                batch.mapping_config.pop('excluded_columns', None)
                 batch.status = 'UPLOADED'
                 batch.save()
                 StagedRow.objects.filter(batch=batch).delete()
@@ -405,9 +506,13 @@ def import_map_view(request, batch_id):
         # Schema isolation check: reject cross-module imports
         if batch.dataset_type == 'GST' and detected_type == 'MCA':
             messages.error(request, "MCA dataset detected: This file contains MCA company and director columns (CIN, ROC, Director) and cannot be imported into the GST module. Please upload a valid GST file or use the MCA Import module.")
+            col_items = _build_column_items(headers, column_samples, suggested_mapping, None, batch.dataset_type)
             return render(request, 'import/map.html', {
                 'batch': batch,
                 'headers': headers,
+                'column_items': col_items,
+                'selected_count': sum(1 for c in col_items if c['is_selected']),
+                'total_count': len(col_items),
                 'suggested_mapping': suggested_mapping,
                 'canonical_schema': canonical_schema,
                 'detected_type': detected_type,
@@ -415,13 +520,18 @@ def import_map_view(request, batch_id):
                 'column_samples': column_samples,
                 'templates': templates,
                 'available_sheets': available_sheets,
+                'required_target': required_target,
             })
             
         if batch.dataset_type == 'MCA' and detected_type == 'GST':
             messages.error(request, "GST dataset detected: This file contains GST registration columns (GSTIN, Trade Name) and cannot be imported into the MCA module. Please upload a valid MCA file or use the GST Import module.")
+            col_items = _build_column_items(headers, column_samples, suggested_mapping, None, batch.dataset_type)
             return render(request, 'import/map.html', {
                 'batch': batch,
                 'headers': headers,
+                'column_items': col_items,
+                'selected_count': sum(1 for c in col_items if c['is_selected']),
+                'total_count': len(col_items),
                 'suggested_mapping': suggested_mapping,
                 'canonical_schema': canonical_schema,
                 'detected_type': detected_type,
@@ -429,6 +539,7 @@ def import_map_view(request, batch_id):
                 'column_samples': column_samples,
                 'templates': templates,
                 'available_sheets': available_sheets,
+                'required_target': required_target,
             })
 
         # Collect submitted mapping with alias normalization
@@ -439,18 +550,36 @@ def import_map_view(request, batch_id):
             if mapped_val and mapped_val in aliases:
                 mapped_val = aliases[mapped_val]
             submitted_mapping[h] = mapped_val
+
+        # Collect selected columns
+        raw_selected = request.POST.getlist('selected_columns')
+        selected_columns = list(raw_selected)
+        
+        # Ensure mandatory identity field is always selected if mapped
+        for h, target in submitted_mapping.items():
+            if target == required_target or (batch.dataset_type == 'MCA' and target in ('entityId', 'cin')) or (batch.dataset_type == 'GST' and target in ('gst_number', 'gstin')):
+                if h not in selected_columns:
+                    selected_columns.append(h)
+
+        excluded_columns = [h for h in headers if h not in selected_columns]
             
         date_format = request.POST.get('date_format', '%m/%d/%Y' if batch.dataset_type == 'MCA' else '%Y-%m-%d')
         template_name = request.POST.get('template_name', '').strip()
         
         # Validate identity requirement, duplicate targets, and collect warnings
-        is_valid, errors, warnings = validate_mapping_requirements(submitted_mapping, batch.dataset_type)
+        is_valid, errors, warnings = validate_mapping_requirements(submitted_mapping, batch.dataset_type, selected_columns=selected_columns)
         if not is_valid:
             for err in errors:
                 messages.error(request, err)
+            if is_ajax:
+                return JsonResponse({'success': False, 'message': errors[0] if errors else 'Validation failed', 'errors': errors}, status=400)
+            col_items = _build_column_items(headers, column_samples, submitted_mapping, selected_columns, batch.dataset_type)
             return render(request, 'import/map.html', {
                 'batch': batch,
                 'headers': headers,
+                'column_items': col_items,
+                'selected_count': sum(1 for c in col_items if c['is_selected']),
+                'total_count': len(col_items),
                 'suggested_mapping': submitted_mapping,
                 'canonical_schema': canonical_schema,
                 'detected_type': detected_type,
@@ -458,16 +587,32 @@ def import_map_view(request, batch_id):
                 'column_samples': column_samples,
                 'templates': templates,
                 'available_sheets': available_sheets,
+                'required_target': required_target,
             })
             
         if warnings:
             for w in warnings:
                 messages.warning(request, w)
             
+        # Invalidate any previously staged rows and reset preview metrics on mapping change
+        StagedRow.objects.filter(batch=batch).delete()
+        batch.proposed_new_records = 0
+        batch.proposed_updates = 0
+        batch.unchanged_records = 0
+        batch.missing_invalid_values = 0
+        batch.quarantined_rows = 0
+        batch.conflict_count = 0
+        batch.cleaning_summary = {}
+        batch.imported_records = 0
+        batch.checkpoint_row = 0
+
         # Save mapping config into batch
         batch.mapping_config['columns'] = submitted_mapping
+        batch.mapping_config['selected_columns'] = selected_columns
+        batch.mapping_config['excluded_columns'] = excluded_columns
         batch.mapping_config['date_format'] = date_format
-        batch.status = 'MAPPED'
+        batch.mapping_config['export_columns'] = [submitted_mapping[c] for c in selected_columns if submitted_mapping.get(c) and submitted_mapping[c] != 'skip']
+        batch.status = 'QUEUED'
         batch.save()
         
         # Save reusable template if requested
@@ -483,15 +628,47 @@ def import_map_view(request, batch_id):
                 }
             )
             
-        # Run staging & validation
+        # Reuse known total_input_rows if already counted, otherwise count using bounded-memory stream
+        if batch.total_input_rows and batch.total_input_rows > 0:
+            total_rows = batch.total_input_rows
+        else:
+            total_rows = count_file_rows_bounded(
+                file_path=batch.file_path,
+                file_format=batch.file_format,
+                header_row=batch.header_row_index,
+                sheet_name=batch.sheet_name
+            )
+        init_progress(
+            batch_id=batch.batch_id,
+            dataset_type=batch.dataset_type,
+            stage='Queued for processing',
+            total_rows=total_rows
+        )
+
+        # Run staging & validation asynchronously in background daemon
         strict_phone = SystemSetting.get_bool('STRICT_PHONE_PREFIX', default=True)
-        stage_and_validate_batch(batch, strict_phone=strict_phone)
+        start_background_staging_job(batch.batch_id, strict_phone=strict_phone)
         
-        return redirect('hub:import_preview', batch_id=batch.batch_id)
+        if is_ajax:
+            return JsonResponse({
+                'success': True,
+                'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id}),
+                'progress_url': reverse('hub:import_progress_api', kwargs={'batch_id': batch.batch_id})
+            })
+
+        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
         
+    saved_selected = batch.mapping_config.get('selected_columns')
+    column_items = _build_column_items(headers, column_samples, suggested_mapping, saved_selected, batch.dataset_type)
+    selected_count = sum(1 for c in column_items if c['is_selected'])
+    total_count = len(column_items)
+
     return render(request, 'import/map.html', {
         'batch': batch,
         'headers': headers,
+        'column_items': column_items,
+        'selected_count': selected_count,
+        'total_count': total_count,
         'suggested_mapping': suggested_mapping,
         'canonical_schema': canonical_schema,
         'detected_type': detected_type,
@@ -499,7 +676,59 @@ def import_map_view(request, batch_id):
         'column_samples': column_samples,
         'templates': templates,
         'available_sheets': available_sheets,
+        'required_target': required_target,
     })
+
+
+def _get_export_columns_list(batch):
+    mapping_config = batch.mapping_config or {}
+    selected_cols = mapping_config.get('selected_columns')
+    columns_mapping = mapping_config.get('columns') or {}
+
+    if selected_cols is not None:
+        selected_set = set(selected_cols)
+        imported_targets = {t for src, t in columns_mapping.items() if src in selected_set and t and t != 'skip'}
+    else:
+        imported_targets = {t for t in columns_mapping.values() if t and t != 'skip'}
+
+    if batch.dataset_type == 'MCA':
+        candidate_fields = [
+            ('Row Number', 'Row Number', True),
+            ('Entity ID', 'entityId', 'entityId' in imported_targets),
+            ('Company Name', 'name', 'name' in imported_targets),
+            ('State', 'state', 'state' in imported_targets),
+            ('City', 'city', 'city' in imported_targets),
+            ('ROC', 'roc', 'roc' in imported_targets),
+            ('Main Division', 'nicCode', 'nicCode' in imported_targets),
+            ('Date of Incorporation', 'dateOfIncorporation', 'dateOfIncorporation' in imported_targets),
+            ('Authorized Capital', 'authorizedCapital', 'authorizedCapital' in imported_targets),
+            ('Paid Up Capital', 'paidUpCapital', 'paidUpCapital' in imported_targets),
+            ('Company Email', 'email', 'email' in imported_targets),
+            ('Registered Address', 'registeredAddress', 'registeredAddress' in imported_targets),
+            ('DIN', 'din', 'din' in imported_targets),
+            ('Director Name', 'directorName', 'directorName' in imported_targets),
+            ('Normalized Phone', 'directorMobile', 'directorMobile' in imported_targets),
+            ('Director Email', 'directorEmail', 'directorEmail' in imported_targets),
+        ]
+    else:
+        candidate_fields = [
+            ('Row Number', 'Row Number', True),
+            ('GSTIN', 'gst_number', 'gst_number' in imported_targets),
+            ('Legal Name', 'legal_name', 'legal_name' in imported_targets),
+            ('Trade Name', 'trade_name', 'trade_name' in imported_targets),
+            ('Status', 'status', 'status' in imported_targets),
+            ('Taxpayer Type', 'type', 'type' in imported_targets),
+            ('Registration Date', 'registration_date', 'registration_date' in imported_targets),
+            ('PAN', 'pan', 'pan' in imported_targets),
+            ('Normalized Phone', 'mobile', 'mobile' in imported_targets),
+            ('Email', 'email', 'email' in imported_targets),
+            ('Address', 'address', 'address' in imported_targets),
+            ('State', 'state', 'state' in imported_targets),
+            ('City', 'city', 'city' in imported_targets),
+            ('Pincode', 'Pincode', 'Pincode' in imported_targets),
+        ]
+
+    return [{'title': title, 'key': key, 'is_selected': is_sel} for title, key, is_sel in candidate_fields if is_sel or key == 'Row Number']
 
 
 @login_required
@@ -508,6 +737,8 @@ def import_preview_view(request, batch_id):
     Step 3: Staging review, conflict inspection, and publication approval.
     """
     batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    if batch.status in ('PROCESSING', 'QUEUED', 'IMPORTING'):
+        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
     
     staged_qs = StagedRow.objects.filter(batch=batch).order_by('row_number')
     
@@ -524,6 +755,7 @@ def import_preview_view(request, batch_id):
         'batch': batch,
         'page_obj': page_obj,
         'status_filter': status_filter,
+        'export_columns_list': _get_export_columns_list(batch),
     }
     return render(request, 'import/preview.html', context)
 
@@ -532,15 +764,54 @@ def import_preview_view(request, batch_id):
 def import_reclean_view(request, batch_id):
     """
     Re-runs data cleaning and validation for a staged batch without re-uploading.
+    Runs asynchronously with live progress tracking.
     """
     batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    is_ajax = request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', '')
+
     if batch.status == 'COMPLETED':
         messages.info(request, "This batch has already been published to the database.")
+        if is_ajax:
+            return JsonResponse({'success': False, 'message': 'This batch has already been published to the database.'})
         return redirect('hub:import_batch_detail', batch_id=batch.batch_id)
+
+    if batch.status in ('PROCESSING', 'QUEUED'):
+        if is_ajax:
+            return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id})})
+        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
+
+    # Invalidate existing staged records and reset preview counters before recleaning
+    StagedRow.objects.filter(batch=batch).delete()
+    batch.proposed_new_records = 0
+    batch.proposed_updates = 0
+    batch.unchanged_records = 0
+    batch.missing_invalid_values = 0
+    batch.quarantined_rows = 0
+    batch.conflict_count = 0
+    batch.cleaning_summary = {}
+    batch.status = 'QUEUED'
+    batch.save()
+
+    if batch.total_input_rows and batch.total_input_rows > 0:
+        total_rows = batch.total_input_rows
+    else:
+        total_rows = count_file_rows_bounded(
+            file_path=batch.file_path,
+            file_format=batch.file_format,
+            header_row=batch.header_row_index,
+            sheet_name=batch.sheet_name
+        )
+    init_progress(
+        batch_id=batch.batch_id,
+        dataset_type=batch.dataset_type,
+        stage='Queued for processing',
+        total_rows=total_rows
+    )
     strict_phone = SystemSetting.get_bool('STRICT_PHONE_PREFIX', default=True)
-    stage_and_validate_batch(batch, strict_phone=strict_phone)
-    messages.success(request, "Data cleaning re-executed successfully! Preview metrics updated.")
-    return redirect('hub:import_preview', batch_id=batch.batch_id)
+    start_background_staging_job(batch.batch_id, strict_phone=strict_phone)
+    if is_ajax:
+        return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id})})
+    return redirect('hub:import_progress_page', batch_id=batch.batch_id)
 
 
 @login_required
@@ -570,110 +841,126 @@ def download_cleaned_file_view(request, batch_id):
     """
     Downloads a sanitized CSV of all cleaned records ready for external use.
     Does not modify the original source file.
+    Omits excluded columns; respects import selection and optional ?columns= query parameter.
     """
     batch = get_object_or_404(ImportBatch, batch_id=batch_id)
-    staged_rows = StagedRow.objects.filter(batch=batch).order_by('row_number')
-    
-    response = HttpResponse(content_type='text/csv; charset=utf-8')
+    cols_param = request.GET.get('columns')
+    columns = [c.strip() for c in cols_param.split(',') if c.strip()] if cols_param else None
+    file_path = export_cleaned_master_data(batch, file_format='CSV', columns=columns)
     filename = f"cleaned_{batch.dataset_type}_{batch.batch_id}.csv"
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
-    
-    writer = csv.writer(response)
-    if batch.dataset_type == 'GST':
-        headers = [
-            'Row Number', 'GSTIN', 'Legal Name', 'Trade Name', 'Cleaned Mobile',
-            'Original Mobile', 'Phone Status', 'Email', 'PAN', 'Status',
-            'Registration Date', 'Address', 'City', 'State', 'Pincode',
-            'Validation Status', 'Validation Notes'
-        ]
-        writer.writerow(headers)
-        for s in staged_rows:
-            c = s.cleaned_data
-            writer.writerow([
-                s.row_number,
-                sanitize_spreadsheet_value(c.get('gst_number', '')),
-                sanitize_spreadsheet_value(c.get('legal_name', '')),
-                sanitize_spreadsheet_value(c.get('trade_name', '')),
-                sanitize_spreadsheet_value(c.get('canonical_mobile', '') or c.get('cleaned_phone', '')),
-                sanitize_spreadsheet_value(c.get('original_phone', '')),
-                c.get('phone_status', '') or c.get('phone_validity', ''),
-                sanitize_spreadsheet_value(c.get('email', '') or c.get('clean_email', '')),
-                sanitize_spreadsheet_value(c.get('pan', '') or c.get('clean_pan', '')),
-                sanitize_spreadsheet_value(c.get('status', '')),
-                sanitize_spreadsheet_value(c.get('clean_registration_date', '') or c.get('registration_date', '')),
-                sanitize_spreadsheet_value(c.get('address', '')),
-                sanitize_spreadsheet_value(c.get('city', '')),
-                sanitize_spreadsheet_value(c.get('state', '')),
-                sanitize_spreadsheet_value(c.get('clean_pincode', '') or c.get('Pincode', '')),
-                s.validation_status,
-                sanitize_spreadsheet_value("; ".join(s.validation_messages))
-            ])
-    else:
-        headers = [
-            'Row Number', 'Entity ID', 'Entity Type', 'Company Name', 'State',
-            'City', 'ROC', 'Email', 'Incorporation Date', 'Paid Up Capital',
-            'Authorized Capital', 'Director Name', 'Cleaned Mobile', 'Original Mobile',
-            'Phone Status', 'Director Email', 'DIN', 'Validation Status', 'Validation Notes'
-        ]
-        writer.writerow(headers)
-        for s in staged_rows:
-            c = s.cleaned_data
-            writer.writerow([
-                s.row_number,
-                sanitize_spreadsheet_value(c.get('entityId', '')),
-                sanitize_spreadsheet_value(c.get('entityType', '')),
-                sanitize_spreadsheet_value(c.get('name', '')),
-                sanitize_spreadsheet_value(c.get('state', '')),
-                sanitize_spreadsheet_value(c.get('city', '')),
-                sanitize_spreadsheet_value(c.get('roc', '')),
-                sanitize_spreadsheet_value(c.get('email', '') or c.get('clean_email', '')),
-                sanitize_spreadsheet_value(c.get('clean_doi', '') or c.get('dateOfIncorporation', '')),
-                sanitize_spreadsheet_value(c.get('clean_paid_up_capital', '') or c.get('paidUpCapital', '')),
-                sanitize_spreadsheet_value(c.get('clean_authorized_capital', '') or c.get('authorizedCapital', '')),
-                sanitize_spreadsheet_value(c.get('directorName', '')),
-                sanitize_spreadsheet_value(c.get('canonical_mobile', '') or c.get('cleaned_phone', '')),
-                sanitize_spreadsheet_value(c.get('original_phone', '')),
-                c.get('phone_status', '') or c.get('phone_validity', ''),
-                sanitize_spreadsheet_value(c.get('directorEmail', '')),
-                sanitize_spreadsheet_value(c.get('clean_din', '') or c.get('din', '')),
-                s.validation_status,
-                sanitize_spreadsheet_value("; ".join(s.validation_messages))
-            ])
-    return response
+    return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=filename)
+
+
+@login_required
+def download_cleaned_master_view(request, batch_id):
+    """
+    Output A: Cleaned Master Data (Requirement 8A).
+    Cleaned entities, contacts/directors, canonical phones, status, and validation notes.
+    Supports column customization via ?columns=... or defaults to import selection.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    fmt = request.GET.get('format', 'CSV').upper()
+    if fmt not in ('CSV', 'XLSX'):
+        fmt = 'CSV'
+    cols_param = request.GET.get('columns')
+    columns = [c.strip() for c in cols_param.split(',') if c.strip()] if cols_param else None
+    file_path = export_cleaned_master_data(batch, file_format=fmt, columns=columns)
+    return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=os.path.basename(file_path))
+
+
+@login_required
+def download_ready_to_call_view(request, batch_id):
+    """
+    Output B: Ready-to-Call List (Requirement 8B).
+    Deduplicated by normalized 10-digit phone within batch with entity/director associations.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    fmt = request.GET.get('format', 'CSV').upper()
+    if fmt not in ('CSV', 'XLSX'):
+        fmt = 'CSV'
+    file_path = export_ready_to_call_list(batch, file_format=fmt)
+    return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=os.path.basename(file_path))
+
+
+@login_required
+def download_review_report_view(request, batch_id):
+    """
+    Output C: Review Report (Requirement 8C).
+    Invalid phones, multiple numbers, ambiguous associations, and conflicting records.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    fmt = request.GET.get('format', 'CSV').upper()
+    if fmt not in ('CSV', 'XLSX'):
+        fmt = 'CSV'
+    file_path = export_review_report(batch, file_format=fmt)
+    return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=os.path.basename(file_path))
+
+
+@login_required
+def download_audit_output_view(request, batch_id):
+    """
+    Output D: Audit Output (Requirement 8D).
+    Field-level before/after transformations, rule names, and validation statuses.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    fmt = request.GET.get('format', 'CSV').upper()
+    if fmt not in ('CSV', 'XLSX'):
+        fmt = 'CSV'
+    file_path = export_audit_output(batch, file_format=fmt)
+    return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=os.path.basename(file_path))
+
+
+@login_required
+def download_processing_summary_view(request, batch_id):
+    """
+    Output E: Processing Summary (Requirement 8E).
+    Input counts, unique companies/contacts/phones, shared phone counts, and multiplicity explanation.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    fmt = request.GET.get('format', 'JSON').upper()
+    summary = export_processing_summary(batch)
+    if fmt == 'CSV':
+        response = HttpResponse(content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="processing_summary_{batch.batch_id}.csv"'
+        writer = csv.writer(response)
+        writer.writerow(['Metric / Field', 'Value'])
+        for k, v in summary.items():
+            writer.writerow([k, v])
+        return response
+    return JsonResponse(summary, json_dumps_params={'indent': 2})
 
 
 @login_required
 def import_execute_view(request, batch_id):
     """
-    Step 4: Execute publication atomically.
+    Step 4: Execute publication atomically with background progress tracking.
     """
     batch = get_object_or_404(ImportBatch, batch_id=batch_id)
-    if request.method == 'POST':
-        try:
-            execute_import_publication(batch, user=request.user)
-            if batch.dataset_type == 'GST':
-                messages.success(
-                    request,
-                    f"GST import completed successfully! {batch.imported_records} records processed: "
-                    f"{batch.proposed_new_records} new imported, {batch.proposed_updates} updated, "
-                    f"{batch.unchanged_records} unchanged (skipped), {batch.conflict_count} duplicate, "
-                    f"{batch.quarantined_rows} rejected."
-                )
-                return redirect('hub:gst_list')
-            else:
-                messages.success(
-                    request,
-                    f"MCA import completed successfully! {batch.imported_records} records processed: "
-                    f"{batch.proposed_new_records} new imported, {batch.proposed_updates} updated, "
-                    f"{batch.unchanged_records} unchanged (skipped), {batch.conflict_count} duplicate, "
-                    f"{batch.quarantined_rows} rejected."
-                )
-                return redirect('hub:mca_list')
-        except Exception as e:
-            messages.error(request, f"Import failed: {str(e)}")
-            return redirect('hub:import_preview', batch_id=batch.batch_id)
-            
+    is_ajax = request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', '')
+
+    if batch.status == 'COMPLETED':
+        if is_ajax:
+            return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_batch_detail', kwargs={'batch_id': batch.batch_id})})
         return redirect('hub:import_batch_detail', batch_id=batch.batch_id)
+
+    if batch.status in ('IMPORTING', 'PROCESSING'):
+        if is_ajax:
+            return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id})})
+        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
+
+    if request.method == 'POST':
+        start_background_publication_job(batch.batch_id, user_id=request.user.id)
+        batch.refresh_from_db()
+
+        if is_ajax:
+            return JsonResponse({
+                'success': True,
+                'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id}),
+                'progress_url': reverse('hub:import_progress_api', kwargs={'batch_id': batch.batch_id})
+            })
+        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
+        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
+
     return redirect('hub:import_preview', batch_id=batch.batch_id)
 
 
@@ -696,21 +983,131 @@ def import_batch_detail_view(request, batch_id):
         'batch': batch,
         'page_obj': page_obj,
         'action_filter': action_filter,
-        'quality_issues': QualityIssue.objects.filter(batch=batch)
+        'quality_issues': QualityIssue.objects.filter(batch=batch),
+        'export_columns_list': _get_export_columns_list(batch),
     }
     return render(request, 'import/batch_detail.html', context)
 
 
+ACTIVE_IMPORT_STATUSES = ['IMPORTING', 'QUEUED', 'PENDING', 'PROCESSING', 'RUNNING', 'STAGING', 'VALIDATING']
+
+
+def get_user_import_batches_qs(user):
+    """
+    Returns ImportBatch queryset scoped to the current user's authorized scope.
+    Superusers can view and manage all batches.
+    Standard users are scoped strictly to their own uploaded batches.
+    """
+    if user.is_superuser:
+        return ImportBatch.objects.all()
+    return ImportBatch.objects.filter(created_by=user)
+
+
 @login_required
 def import_history_view(request):
-    batches = ImportBatch.objects.all().order_by('-created_at')
+    base_batches = get_user_import_batches_qs(request.user)
+    eligible_count = base_batches.exclude(status__in=ACTIVE_IMPORT_STATUSES).count()
+    active_count = base_batches.filter(status__in=ACTIVE_IMPORT_STATUSES).count()
+
+    batches = base_batches.order_by('-created_at')
     dataset = request.GET.get('dataset')
     if dataset:
         batches = batches.filter(dataset_type=dataset)
         
     paginator = Paginator(batches, 15)
     page_obj = paginator.get_page(request.GET.get('page', 1))
-    return render(request, 'import/history.html', {'page_obj': page_obj, 'dataset': dataset})
+    return render(request, 'import/history.html', {
+        'page_obj': page_obj,
+        'dataset': dataset,
+        'eligible_count': eligible_count,
+        'active_count': active_count,
+        'total_batches_count': base_batches.count(),
+    })
+
+
+@login_required
+def import_history_clear_all_view(request):
+    """
+    Clears all eligible import-history records within the current user's authorized scope.
+    - Preserves uploaded files on disk, cleaned output files, saved mappings, keywords,
+      and all other application data (MCA companies, GST records, Quality issues, Audit log, etc.).
+    - Keeps active or queued import jobs running; excludes them from deletion and clearly reports count.
+    - Updates persistent storage atomically so cleared records do not return after refresh.
+    - Supports both AJAX/JSON requests and standard POST form redirects.
+    - Restricted to current user's authorized scope; does not affect other users' history or other modules.
+    """
+    is_ajax = request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', '')
+
+    if request.method != 'POST':
+        msg = "Invalid request method. Clear All must be submitted via POST."
+        if is_ajax:
+            return JsonResponse({'success': False, 'message': msg}, status=405)
+        messages.error(request, msg)
+        return redirect('hub:import_history')
+
+    try:
+        user_batches = get_user_import_batches_qs(request.user)
+        active_batches = user_batches.filter(status__in=ACTIVE_IMPORT_STATUSES)
+        active_count = active_batches.count()
+
+        eligible_batches = user_batches.exclude(status__in=ACTIVE_IMPORT_STATUSES)
+        eligible_count = eligible_batches.count()
+
+        if eligible_count == 0:
+            if active_count > 0:
+                msg = f"No eligible import history records to clear. {active_count} active or queued import job(s) retained."
+            else:
+                msg = "No eligible import history records to clear."
+            if is_ajax:
+                return JsonResponse({'success': True, 'cleared_count': 0, 'active_count': active_count, 'message': msg})
+            messages.info(request, msg)
+            return redirect('hub:import_history')
+
+        with transaction.atomic():
+            # Delete only eligible ImportBatch records (cascades to StagedRow rows for these batches only)
+            # Source files on disk, cleaned outputs, saved mappings, and database records remain intact.
+            eligible_batches.delete()
+
+            # Record Audit event
+            AuditEvent.objects.create(
+                user=request.user,
+                action='DELETE',
+                dataset_type='SYSTEM',
+                model_name='ImportBatch',
+                object_id='ALL',
+                object_repr=f"Cleared {eligible_count} import history records",
+                changes={
+                    'scope': 'user_authorized_scope',
+                    'user': request.user.username,
+                    'cleared_count': eligible_count,
+                    'active_retained_count': active_count,
+                }
+            )
+
+        if active_count > 0:
+            success_msg = f"Successfully cleared {eligible_count} import history record(s). Retained {active_count} active or queued import job(s)."
+        else:
+            success_msg = f"Successfully cleared all {eligible_count} import history record(s)."
+
+        if is_ajax:
+            return JsonResponse({
+                'success': True,
+                'cleared_count': eligible_count,
+                'active_count': active_count,
+                'message': success_msg,
+                'redirect_url': reverse('hub:import_history')
+            })
+
+        messages.success(request, success_msg)
+        return redirect('hub:import_history')
+
+    except Exception as e:
+        logger.error(f"Failed to clear import history: {str(e)}", exc_info=True)
+        err_msg = f"Failed to clear import history: {str(e)}"
+        if is_ajax:
+            return JsonResponse({'success': False, 'message': err_msg}, status=500)
+        messages.error(request, err_msg)
+        return redirect('hub:import_history')
 
 
 @login_required
@@ -750,6 +1147,67 @@ def download_cleaning_report_view(request, batch_id):
         ])
         
     return response
+
+
+@login_required
+def import_progress_api_view(request, batch_id):
+    """
+    Returns live progress metrics and stage information for a specific import job.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    if not request.user.is_superuser and batch.created_by != request.user:
+        return JsonResponse({'error': 'Unauthorized'}, status=403)
+    data = get_progress(batch_id)
+    return JsonResponse(data)
+
+
+@login_required
+def import_progress_page_view(request, batch_id):
+    """
+    Renders live progress tracking page for an import job.
+    Resilient across page refreshes.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    if not request.user.is_superuser and batch.created_by != request.user:
+        messages.error(request, "You are not authorized to view this import batch.")
+        return redirect('hub:import_history')
+    progress_data = get_progress(batch_id)
+    return render(request, 'import/progress.html', {
+        'batch': batch,
+        'progress': progress_data
+    })
+
+
+@login_required
+def import_cancel_view(request, batch_id):
+    """
+    Cancels an active or queued import job.
+    """
+    batch = get_object_or_404(ImportBatch, batch_id=batch_id)
+    if not request.user.is_superuser and batch.created_by != request.user:
+        return JsonResponse({'error': 'Unauthorized'}, status=403)
+    request_cancel(batch_id)
+    batch.status = 'CANCELLED'
+    batch.save(update_fields=['status'])
+    is_ajax = request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', '')
+    if is_ajax:
+        return JsonResponse({'success': True, 'message': 'Import job cancelled.'})
+    messages.info(request, "Import job was cancelled.")
+    return redirect('hub:import_map', batch_id=batch.batch_id)
+
+
+@login_required
+def import_active_progress_api_view(request):
+    """
+    Returns progress states of all active/queued imports in the current user's authorized scope.
+    Powers live auto-refresh in Import History.
+    """
+    user_batches = get_user_import_batches_qs(request.user)
+    active_batches = user_batches.filter(status__in=ACTIVE_IMPORT_STATUSES)
+    results = {}
+    for b in active_batches:
+        results[b.batch_id] = get_progress(b.batch_id)
+    return JsonResponse({'active_batches': results, 'active_count': len(results)})
 
 
 # ==========================================

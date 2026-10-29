@@ -62,6 +62,74 @@
                 <div class="kpi-title">Quarantined</div>
                 <div class="kpi-value text-danger fs-3">{{ batch.quarantined_rows }}</div>
             </div>
+    </div>
+
+    <!-- Standard Cleaned Outputs (Requirement 8 A-E) -->
+    <div class="card card-custom p-3 mb-4 bg-white shadow-sm border-start border-4 border-success">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div>
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-file-earmark-spreadsheet-fill text-success fs-4"></i>
+                    <h6 class="fw-bold mb-0">Standard Deliverables & Outputs</h6>
+                </div>
+                <small class="text-muted">Directly export cleaned master data, phone-deduplicated calling lists, audit traces, or review reports.</small>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <!-- Output A: Cleaned Master Data -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_cleaned_master' batch.batch_id %}?format=CSV" class="btn btn-outline-success btn-sm fw-semibold">
+                        <i class="bi bi-file-earmark-text me-1"></i> A. Master Data
+                    </a>
+                    <button type="button" class="btn btn-outline-success btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_cleaned_master' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>Download as CSV</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_cleaned_master' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Download as Excel (.xlsx)</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#customizeExportModal"><i class="bi bi-sliders me-2"></i>Customize Export Columns...</button></li>
+                    </ul>
+                </div>
+
+                <!-- Output B: Ready-to-Call List -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_ready_to_call' batch.batch_id %}?format=CSV" class="btn btn-outline-primary btn-sm fw-semibold">
+                        <i class="bi bi-telephone-outbound me-1"></i> B. Ready-to-Call List
+                    </a>
+                    <button type="button" class="btn btn-outline-primary btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_ready_to_call' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>CSV (1 row per valid phone)</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_ready_to_call' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Excel (.xlsx)</a></li>
+                    </ul>
+                </div>
+
+                <!-- Output C: Review Report -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_review_report' batch.batch_id %}?format=CSV" class="btn btn-outline-warning text-dark btn-sm fw-semibold">
+                        <i class="bi bi-exclamation-triangle me-1"></i> C. Review Report
+                    </a>
+                    <button type="button" class="btn btn-outline-warning text-dark btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_review_report' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>CSV</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_review_report' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Excel (.xlsx)</a></li>
+                    </ul>
+                </div>
+
+                <!-- Output D: Audit Output -->
+                <div class="btn-group">
+                    <a href="{% url 'hub:download_audit_output' batch.batch_id %}?format=CSV" class="btn btn-outline-secondary btn-sm fw-semibold">
+                        <i class="bi bi-clock-history me-1"></i> D. Audit Trace
+                    </a>
+                    <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <li><a class="dropdown-item" href="{% url 'hub:download_audit_output' batch.batch_id %}?format=CSV"><i class="bi bi-filetype-csv me-2"></i>CSV</a></li>
+                        <li><a class="dropdown-item" href="{% url 'hub:download_audit_output' batch.batch_id %}?format=XLSX"><i class="bi bi-filetype-xlsx me-2"></i>Excel (.xlsx)</a></li>
+                    </ul>
+                </div>
+
+                <!-- Output E: Summary Stats -->
+                <a href="{% url 'hub:download_processing_summary' batch.batch_id %}?format=JSON" target="_blank" class="btn btn-outline-info text-dark btn-sm fw-semibold">
+                    <i class="bi bi-pie-chart me-1"></i> E. Summary Stats
+                </a>
+            </div>
         </div>
     </div>
 
@@ -71,28 +139,18 @@
             <div class="d-flex align-items-center gap-2">
                 <i class="bi bi-shield-check text-primary fs-3"></i>
                 <div>
-                    <h6 class="fw-bold mb-0">Data Cleaning & Staging Completed</h6>
-                    <small class="text-muted">Review before/after values and row-level errors below. Cleaned values match database storage exactly.</small>
+                    <h6 class="fw-bold mb-0">Publishing Operations</h6>
+                    <small class="text-muted">Re-clean data, change mappings, or commit validated records directly to database.</small>
                 </div>
             </div>
             <div class="d-flex flex-wrap gap-2">
                 <!-- 1. Clean Data (Re-run) -->
-                <form action="{% url 'hub:import_reclean' batch.batch_id %}" method="post" class="d-inline">
+                <form action="{% url 'hub:import_reclean' batch.batch_id %}" method="post" class="d-inline" id="recleanForm">
                     {% csrf_token %}
-                    <button type="submit" class="btn btn-outline-primary btn-sm" title="Re-run data cleaning rules on uploaded rows">
+                    <button type="submit" class="btn btn-outline-primary btn-sm" id="recleanBtn" title="Re-run data cleaning rules on uploaded rows">
                         <i class="bi bi-magic me-1"></i> Clean Data
                     </button>
                 </form>
-
-                <!-- 2. Download Cleaned File -->
-                <a href="{% url 'hub:download_cleaned_file' batch.batch_id %}" class="btn btn-outline-success btn-sm" title="Download sanitized and cleaned dataset as CSV">
-                    <i class="bi bi-file-earmark-check me-1"></i> Download Cleaned File
-                </a>
-
-                <!-- 3. Download Error Report -->
-                <a href="{% url 'hub:download_cleaning_report' batch.batch_id %}" class="btn btn-outline-secondary btn-sm" title="Download row-by-row validation & error report">
-                    <i class="bi bi-file-earmark-text me-1"></i> Error Report
-                </a>
 
                 <!-- 4. Reset Batch -->
                 <form action="{% url 'hub:import_reset' batch.batch_id %}" method="post" class="d-inline" onsubmit="return confirm('Reset staged records and return to column mapping?');">
@@ -185,7 +243,16 @@
                         <td>
                             {% if batch.dataset_type == 'MCA' %}
                             <div>{{ staged.cleaned_data.directorName|default:"-" }}</div>
-                            <small class="text-muted d-block">{{ staged.cleaned_data.directorEmail|default:staged.cleaned_data.email|default:"" }}</small>
+                            {% if staged.cleaned_data.directorEmail %}
+                            <small class="text-muted d-block">{{ staged.cleaned_data.directorEmail }}</small>
+                            {% if staged.cleaned_data.email and staged.cleaned_data.email != staged.cleaned_data.directorEmail %}
+                            <small class="text-muted d-block"><span class="text-secondary small">(Company)</span> {{ staged.cleaned_data.email }}</small>
+                            {% endif %}
+                            {% elif staged.cleaned_data.email %}
+                            <small class="text-muted d-block"><span class="text-secondary small">(Company)</span> {{ staged.cleaned_data.email }}</small>
+                            {% else %}
+                            <small class="text-muted d-block"></small>
+                            {% endif %}
                             {% else %}
                             <div>{{ staged.cleaned_data.legal_name|default:"-" }}</div>
                             <small class="text-muted d-block">{{ staged.cleaned_data.email|default:"" }}</small>
@@ -196,14 +263,15 @@
                             <div class="small text-muted">
                                 Raw: <span class="font-monospace">{% firstof staged.cleaned_data.original_phone staged.cleaned_data.directorMobile staged.cleaned_data.mobile "-" %}</span>
                             </div>
-                            {% if staged.cleaned_data.cleaned_phone or staged.cleaned_data.canonical_mobile %}
+                            {% firstof staged.cleaned_data.cleaned_phone staged.cleaned_data.canonical_mobile as clean_phone %}
+                            {% if clean_phone %}
                             <div class="font-monospace fw-bold text-dark my-1">
-                                Clean: {{ staged.cleaned_data.cleaned_phone|default:staged.cleaned_data.canonical_mobile|format_phone }}
+                                Clean: {{ clean_phone|format_phone }}
                             </div>
                             {% else %}
                             <div class="small text-muted fst-italic my-1">Clean: <span class="text-danger">null / blank</span></div>
                             {% endif %}
-                            {% with pstatus=staged.cleaned_data.phone_status|default:staged.cleaned_data.phone_validity %}
+                            {% firstof staged.cleaned_data.phone_status staged.cleaned_data.phone_validity as pstatus %}
                             {% if pstatus == 'valid' or pstatus == 'VALID' %}
                             <span class="badge badge-valid">VALID (10 DIGIT)</span>
                             {% elif pstatus == 'cleaned' %}
@@ -215,7 +283,6 @@
                             {% else %}
                             <span class="badge badge-blank">MISSING</span>
                             {% endif %}
-                            {% endwith %}
                         </td>
                         <td class="small">
                             {% if staged.validation_messages %}
@@ -263,6 +330,17 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
+    const previewOverlay = document.getElementById('previewLoadingOverlay');
+    const previewOverlayTitle = document.getElementById('previewOverlayTitle');
+    const previewOverlaySubtext = document.getElementById('previewOverlaySubtext');
+
+    function showPreviewOverlay(title, subtext) {
+        if (!previewOverlay) return;
+        if (previewOverlayTitle && title) previewOverlayTitle.textContent = title;
+        if (previewOverlaySubtext && subtext) previewOverlaySubtext.textContent = subtext;
+        previewOverlay.classList.remove('d-none');
+    }
+
     const publishForm = document.getElementById('publishToDbForm');
     const publishBtn = document.getElementById('publishToDbBtn');
     if (publishForm && publishBtn) {
@@ -276,12 +354,130 @@ document.addEventListener('DOMContentLoaded', () => {
                 return false;
             }
             publishBtn.dataset.submitting = 'true';
-            publishBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Publishing...';
+            publishBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Preparing publish...';
+            showPreviewOverlay('Preparing database publish...', 'Initializing atomic transaction, staging database writer, and starting commit batches.');
             setTimeout(() => {
                 publishBtn.disabled = true;
             }, 0);
         });
     }
+
+    const recleanForm = document.getElementById('recleanForm');
+    const recleanBtn = document.getElementById('recleanBtn');
+    if (recleanForm && recleanBtn) {
+        recleanForm.addEventListener('submit', (e) => {
+            if (recleanBtn.dataset.submitting === 'true' || recleanBtn.disabled) {
+                e.preventDefault();
+                return false;
+            }
+            recleanBtn.dataset.submitting = 'true';
+            recleanBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Validating & Cleaning...';
+            showPreviewOverlay('Validating and cleaning...', 'Re-running data cleaning rules, contact deduplication, and relationship checks.');
+            setTimeout(() => {
+                recleanBtn.disabled = true;
+            }, 0);
+        });
+    }
+
+    // Customize Export Columns modal logic
+    const exportSelectAllBtn = document.getElementById('exportSelectAllBtn');
+    const exportClearAllBtn = document.getElementById('exportClearAllBtn');
+    const exportCheckboxes = document.querySelectorAll('.export-col-cb');
+    const confirmCustomExportBtn = document.getElementById('confirmCustomExportBtn');
+    const exportFormatSelect = document.getElementById('exportFormatSelect');
+
+    if (exportSelectAllBtn) {
+        exportSelectAllBtn.addEventListener('click', () => {
+            exportCheckboxes.forEach(cb => cb.checked = true);
+        });
+    }
+    if (exportClearAllBtn) {
+        exportClearAllBtn.addEventListener('click', () => {
+            exportCheckboxes.forEach((cb, idx) => {
+                if (idx > 0) cb.checked = false;
+            });
+        });
+    }
+    if (confirmCustomExportBtn) {
+        confirmCustomExportBtn.addEventListener('click', () => {
+            const chosen = [];
+            exportCheckboxes.forEach(cb => {
+                if (cb.checked) chosen.push(cb.value);
+            });
+            if (chosen.length === 0) {
+                alert('Please select at least one column to export.');
+                return;
+            }
+            const fmt = exportFormatSelect ? exportFormatSelect.value : 'CSV';
+            const url = "{% url 'hub:download_cleaned_master' batch.batch_id %}?format=" + encodeURIComponent(fmt) + "&columns=" + encodeURIComponent(chosen.join(','));
+            window.location.href = url;
+            const modalEl = document.getElementById('customizeExportModal');
+            if (modalEl && typeof bootstrap !== 'undefined') {
+                const modalInstance = bootstrap.Modal.getInstance(modalEl);
+                if (modalInstance) modalInstance.hide();
+            }
+        });
+    }
 });
 </script>
+
+<!-- Modal: Customize Export Columns -->
+<div class="modal fade" id="customizeExportModal" tabindex="-1" aria-labelledby="customizeExportModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header bg-light">
+                <h6 class="modal-title fw-bold" id="customizeExportModalLabel">
+                    <i class="bi bi-sliders me-2 text-success"></i>Customize Export Columns
+                </h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+                <p class="small text-muted mb-3">
+                    Select columns to include in your download. By default, columns selected during import are included. Excluded source columns are omitted.
+                </p>
+                <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom">
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2 small" id="exportSelectAllBtn">Select All</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 small" id="exportClearAllBtn">Clear Optional</button>
+                    </div>
+                    <span class="small text-muted">Checkboxes customize download</span>
+                </div>
+                <div class="row g-2 mb-3" style="max-height: 240px; overflow-y: auto;">
+                    {% for col in export_columns_list %}
+                    <div class="col-6">
+                        <div class="form-check">
+                            <input class="form-check-input export-col-cb" type="checkbox" value="{{ col.title }}" id="exp_col_{{ forloop.counter }}" checked>
+                            <label class="form-check-label small" for="exp_col_{{ forloop.counter }}">
+                                {{ col.title }}
+                            </label>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small fw-semibold">Export File Format</label>
+                    <select id="exportFormatSelect" class="form-select form-select-sm">
+                        <option value="CSV" selected>CSV (Comma Separated Values)</option>
+                        <option value="XLSX">Excel Spreadsheet (.xlsx)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer bg-light py-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-success fw-semibold" id="confirmCustomExportBtn">
+                    <i class="bi bi-download me-1"></i>Download Export
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Full-Screen Loading Overlay for Preview Operations -->
+<div id="previewLoadingOverlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-dark bg-opacity-50 d-flex flex-column align-items-center justify-content-center" style="z-index: 9999;">
+    <div class="card card-custom p-4 shadow-lg text-center bg-white" style="max-width: 440px;">
+        <div class="spinner-border text-primary mb-3 mx-auto" style="width: 3rem; height: 3rem;" role="status"></div>
+        <h5 class="fw-bold text-dark" id="previewOverlayTitle">Processing Operation...</h5>
+        <p class="text-muted small mb-0" id="previewOverlaySubtext">Please wait while the server processes your request.</p>
+    </div>
+</div>
 {% endblock %}

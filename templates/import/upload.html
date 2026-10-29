@@ -36,7 +36,7 @@
             </div>
         </div>
 
-        <form method="post" enctype="multipart/form-data">
+        <form method="post" enctype="multipart/form-data" id="datasetUploadForm">
             {% csrf_token %}
 
             <div class="row g-3 mb-4">
@@ -87,13 +87,333 @@
                 </div>
             </div>
 
+            <!-- Live Upload Progress Component (Shown immediately upon clicking upload) -->
+            <div id="uploadProgressSection" class="d-none mb-4 p-3 border rounded-3 bg-light shadow-sm">
+                <!-- Operation & Status Header -->
+                <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="spinner-border spinner-border-sm text-primary" id="uploadSpinner" role="status"></span>
+                        <i class="bi bi-check-circle-fill text-success fs-5 d-none" id="uploadSuccessCheck"></i>
+                        <span class="fw-bold small text-primary" id="uploadOperationTitle">Uploading file</span>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-light text-secondary border small font-monospace" id="uploadPhaseBadge">Phase 1/5</span>
+                        <span class="badge bg-primary-subtle text-primary font-monospace fw-bold" id="uploadPercentageLabel">0%</span>
+                    </div>
+                </div>
+
+                <!-- Progress Bar -->
+                <div class="progress mb-2" style="height: 12px; border-radius: 6px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                         id="uploadProgressBar" 
+                         role="progressbar" 
+                         style="width: 0%;" 
+                         aria-valuenow="0" 
+                         aria-valuemin="0" 
+                         aria-valuemax="100">
+                    </div>
+                </div>
+
+                <!-- KPI Details: Bytes, Speed, Elapsed, ETA -->
+                <div class="row g-2 text-center small my-2">
+                    <div class="col-6 col-sm-3">
+                        <div class="p-2 bg-white rounded border">
+                            <div class="text-muted fs-8">Uploaded / Total</div>
+                            <strong class="text-dark font-monospace" id="uploadByteDetails">0 B / 0 B</strong>
+                        </div>
+                    </div>
+                    <div class="col-6 col-sm-3">
+                        <div class="p-2 bg-white rounded border">
+                            <div class="text-muted fs-8">Transfer Speed</div>
+                            <strong class="text-primary font-monospace" id="uploadSpeedLabel">-- MB/s</strong>
+                        </div>
+                    </div>
+                    <div class="col-6 col-sm-3">
+                        <div class="p-2 bg-white rounded border">
+                            <div class="text-muted fs-8">Elapsed Time</div>
+                            <strong class="text-dark font-monospace" id="uploadElapsedLabel">00:00</strong>
+                        </div>
+                    </div>
+                    <div class="col-6 col-sm-3">
+                        <div class="p-2 bg-white rounded border">
+                            <div class="text-muted fs-8">Estimated Remaining</div>
+                            <strong class="text-primary font-monospace" id="uploadEtaLabel">Calculating...</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Multi-Phase Pipeline Stages Checklist -->
+                <div class="border-top pt-2 mt-2">
+                    <div class="text-muted fs-8 fw-semibold text-uppercase mb-2">Import Pipeline Stages:</div>
+                    <div class="d-flex flex-column gap-1 small" id="pipelinePhasesList">
+                        <div class="d-flex align-items-center gap-2 text-primary fw-medium" id="phaseItem1">
+                            <span class="spinner-border spinner-border-sm text-primary phase-indicator" id="phaseIcon1" style="width: 14px; height: 14px;"></span>
+                            <span>1. Uploading file (client &rarr; server byte stream)</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 text-muted" id="phaseItem2">
+                            <i class="bi bi-circle phase-indicator" id="phaseIcon2" style="font-size: 10px;"></i>
+                            <span>2. Verifying / hashing file (SHA-256 integrity check)</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 text-muted" id="phaseItem3">
+                            <i class="bi bi-circle phase-indicator" id="phaseIcon3" style="font-size: 10px;"></i>
+                            <span>3. Staging file & validating dataset structure</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 text-muted" id="phaseItem4">
+                            <i class="bi bi-circle phase-indicator" id="phaseIcon4" style="font-size: 10px;"></i>
+                            <span>4. Reading worksheet and detecting column headers</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 text-muted" id="phaseItem5">
+                            <i class="bi bi-circle phase-indicator" id="phaseIcon5" style="font-size: 10px;"></i>
+                            <span>5. Preparing column mapping preview</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Error Banner -->
+            <div id="uploadErrorAlert" class="alert alert-danger d-none mb-4 py-2 px-3 small d-flex align-items-start gap-2" role="alert">
+                <i class="bi bi-exclamation-triangle-fill fs-5 flex-shrink-0 text-danger mt-1"></i>
+                <div id="uploadErrorMsg"></div>
+            </div>
+
             <div class="d-flex align-items-center justify-content-between pt-3 border-top">
-                <a href="{% url 'hub:dashboard' %}" class="btn btn-outline-secondary">Cancel</a>
-                <button type="submit" class="btn btn-primary fw-semibold px-4 shadow-sm">
+                <a href="{% url 'hub:dashboard' %}" class="btn btn-outline-secondary" id="cancelUploadLink">Cancel</a>
+                <button type="submit" class="btn btn-primary fw-semibold px-4 shadow-sm" id="uploadSubmitBtn">
                     Upload & Continue to Column Mapping <i class="bi bi-arrow-right ms-1"></i>
                 </button>
             </div>
         </form>
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('datasetUploadForm');
+    const submitBtn = document.getElementById('uploadSubmitBtn');
+    const progressSection = document.getElementById('uploadProgressSection');
+    const progressBar = document.getElementById('uploadProgressBar');
+    const percentageLabel = document.getElementById('uploadPercentageLabel');
+    const operationTitle = document.getElementById('uploadOperationTitle');
+    const phaseBadge = document.getElementById('uploadPhaseBadge');
+    const byteDetails = document.getElementById('uploadByteDetails');
+    const speedLabel = document.getElementById('uploadSpeedLabel');
+    const elapsedLabel = document.getElementById('uploadElapsedLabel');
+    const etaLabel = document.getElementById('uploadEtaLabel');
+    const uploadSpinner = document.getElementById('uploadSpinner');
+    const uploadSuccessCheck = document.getElementById('uploadSuccessCheck');
+
+    const errorAlert = document.getElementById('uploadErrorAlert');
+    const errorMsg = document.getElementById('uploadErrorMsg');
+
+    if (!form || !submitBtn) return;
+
+    function formatBytes(bytes) {
+        if (!bytes || bytes <= 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function formatDuration(sec) {
+        if (sec < 0 || !isFinite(sec)) return '--:--';
+        const s = Math.round(sec);
+        const m = Math.floor(s / 60);
+        const remS = s % 60;
+        return `${m < 10 ? '0' : ''}${m}:${remS < 10 ? '0' : ''}${remS}`;
+    }
+
+    function setPhaseStatus(phaseNum, status) {
+        const item = document.getElementById('phaseItem' + phaseNum);
+        const icon = document.getElementById('phaseIcon' + phaseNum);
+        if (!item || !icon) return;
+
+        if (status === 'active') {
+            item.className = 'd-flex align-items-center gap-2 text-primary fw-bold';
+            icon.outerHTML = `<span class="spinner-border spinner-border-sm text-primary phase-indicator" id="phaseIcon${phaseNum}" style="width: 14px; height: 14px;"></span>`;
+        } else if (status === 'completed') {
+            item.className = 'd-flex align-items-center gap-2 text-success fw-medium';
+            icon.outerHTML = `<i class="bi bi-check-circle-fill text-success phase-indicator" id="phaseIcon${phaseNum}"></i>`;
+        } else {
+            item.className = 'd-flex align-items-center gap-2 text-muted';
+            icon.outerHTML = `<i class="bi bi-circle phase-indicator" id="phaseIcon${phaseNum}" style="font-size: 10px;"></i>`;
+        }
+    }
+
+    form.addEventListener('submit', function(e) {
+        const fileInput = form.querySelector('input[type="file"]');
+        if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+            return;
+        }
+
+        const file = fileInput.files[0];
+        if (file.size === 0) {
+            e.preventDefault();
+            errorAlert.classList.remove('d-none');
+            errorMsg.textContent = "The selected file is empty (0 bytes). Please upload a valid dataset file.";
+            return;
+        }
+
+        e.preventDefault();
+
+        // 1. Prevent duplicate submissions immediately
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-1" role="status"></span> Uploading...`;
+        errorAlert.classList.add('d-none');
+
+        // Reveal shared progress section
+        progressSection.classList.remove('d-none');
+        operationTitle.textContent = "Uploading file";
+        phaseBadge.textContent = "Phase 1/5";
+        percentageLabel.textContent = "0%";
+        progressBar.style.width = "0%";
+        progressBar.setAttribute('aria-valuenow', 0);
+        byteDetails.textContent = `0 B / ${formatBytes(file.size)}`;
+        speedLabel.textContent = "-- MB/s";
+        elapsedLabel.textContent = "00:00";
+        etaLabel.textContent = "Calculating estimate...";
+
+        setPhaseStatus(1, 'active');
+        setPhaseStatus(2, 'pending');
+        setPhaseStatus(3, 'pending');
+        setPhaseStatus(4, 'pending');
+        setPhaseStatus(5, 'pending');
+
+        const formData = new FormData(form);
+        const xhr = new XMLHttpRequest();
+        const startTime = Date.now();
+        let elapsedTimer = null;
+        let serverPhaseTimer = null;
+        let recentLoaded = 0;
+        let recentTime = startTime;
+        let smoothedSpeed = 0;
+
+        // Running elapsed timer interval
+        elapsedTimer = setInterval(function() {
+            const elapsedSeconds = (Date.now() - startTime) / 1000;
+            elapsedLabel.textContent = formatDuration(elapsedSeconds);
+        }, 500);
+
+        // Track byte-level upload progress
+        xhr.upload.addEventListener('progress', function(event) {
+            if (event.lengthComputable) {
+                const percent = Math.min(100, (event.loaded / event.total) * 100);
+                progressBar.style.width = percent + '%';
+                progressBar.setAttribute('aria-valuenow', percent);
+                percentageLabel.textContent = percent.toFixed(1) + '%';
+                byteDetails.textContent = `${formatBytes(event.loaded)} / ${formatBytes(event.total)}`;
+
+                const now = Date.now();
+                const deltaSec = (now - recentTime) / 1000;
+                if (deltaSec >= 0.5 && event.loaded > recentLoaded) {
+                    const instantRate = (event.loaded - recentLoaded) / deltaSec;
+                    smoothedSpeed = smoothedSpeed === 0 ? instantRate : (smoothedSpeed * 0.7 + instantRate * 0.3);
+                    recentLoaded = event.loaded;
+                    recentTime = now;
+
+                    speedLabel.textContent = formatBytes(smoothedSpeed) + '/s';
+
+                    const remainingBytes = Math.max(0, event.total - event.loaded);
+                    if (smoothedSpeed > 0 && remainingBytes > 0) {
+                        const remainingSec = remainingBytes / smoothedSpeed;
+                        etaLabel.textContent = 'approx. ' + formatDuration(remainingSec);
+                    }
+                }
+
+                if (percent >= 100) {
+                    // Upload stream finished; start server processing phase sequencing
+                    setPhaseStatus(1, 'completed');
+                    phaseBadge.textContent = "Phase 2/5";
+                    operationTitle.textContent = "Verifying / hashing file (SHA-256)";
+                    percentageLabel.textContent = "100% Uploaded";
+                    speedLabel.textContent = "Upload Complete";
+                    etaLabel.textContent = "Server preparing...";
+                    setPhaseStatus(2, 'active');
+
+                    // Advance server-side phases visually while waiting for server response
+                    let currentServerPhase = 2;
+                    serverPhaseTimer = setInterval(function() {
+                        currentServerPhase++;
+                        if (currentServerPhase === 3) {
+                            setPhaseStatus(2, 'completed');
+                            setPhaseStatus(3, 'active');
+                            phaseBadge.textContent = "Phase 3/5";
+                            operationTitle.textContent = "Staging file & validating schema";
+                        } else if (currentServerPhase === 4) {
+                            setPhaseStatus(3, 'completed');
+                            setPhaseStatus(4, 'active');
+                            phaseBadge.textContent = "Phase 4/5";
+                            operationTitle.textContent = "Reading worksheet and headers";
+                        } else if (currentServerPhase === 5) {
+                            setPhaseStatus(4, 'completed');
+                            setPhaseStatus(5, 'active');
+                            phaseBadge.textContent = "Phase 5/5";
+                            operationTitle.textContent = "Preparing mapping preview";
+                        }
+                    }, 1200);
+                }
+            }
+        });
+
+        xhr.addEventListener('load', function() {
+            if (elapsedTimer) clearInterval(elapsedTimer);
+            if (serverPhaseTimer) clearInterval(serverPhaseTimer);
+
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                    const data = JSON.parse(xhr.responseText);
+                    if (data.success && data.redirect_url) {
+                        // All phases completed successfully
+                        for (let p = 1; p <= 5; p++) {
+                            setPhaseStatus(p, 'completed');
+                        }
+                        operationTitle.textContent = "Waiting for column mapping";
+                        phaseBadge.textContent = "Complete";
+                        percentageLabel.textContent = "100%";
+                        if (uploadSpinner) uploadSpinner.classList.add('d-none');
+                        if (uploadSuccessCheck) uploadSuccessCheck.classList.remove('d-none');
+                        etaLabel.textContent = "00:00";
+
+                        window.location.href = data.redirect_url;
+                        return;
+                    }
+                } catch (err) {
+                    // Standard redirect or page fallback
+                }
+                window.location.reload();
+            } else {
+                let errText = "Upload failed. Please check file format and try again.";
+                try {
+                    const data = JSON.parse(xhr.responseText);
+                    if (data.message) {
+                        errText = data.message;
+                    }
+                } catch(e) {}
+
+                progressSection.classList.add('d-none');
+                errorAlert.classList.remove('d-none');
+                errorMsg.textContent = errText;
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = `Upload & Continue to Column Mapping <i class="bi bi-arrow-right ms-1"></i>`;
+            }
+        });
+
+        xhr.addEventListener('error', function() {
+            if (elapsedTimer) clearInterval(elapsedTimer);
+            if (serverPhaseTimer) clearInterval(serverPhaseTimer);
+
+            progressSection.classList.add('d-none');
+            errorAlert.classList.remove('d-none');
+            errorMsg.textContent = "Network error during upload. Please check your connection and try again.";
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `Upload & Continue to Column Mapping <i class="bi bi-arrow-right ms-1"></i>`;
+        });
+
+        xhr.open('POST', form.action || window.location.href, true);
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+        xhr.setRequestHeader('Accept', 'application/json');
+        xhr.send(formData);
+    });
+});
+</script>
 {% endblock %}

@@ -30,7 +30,7 @@ class MCACompany(models.Model):
     roc = models.CharField(max_length=100, blank=True, db_index=True)
     nic_code = models.CharField(max_length=32, blank=True, db_index=True)
     nic_label = models.TextField(blank=True)
-    class_of_company = models.CharField(max_length=64, blank=True, help_text="Private, Public, etc.")
+    class_of_company = models.CharField(max_length=255, blank=True, help_text="Private, Public, etc.")
     date_of_incorporation = models.DateField(null=True, blank=True, db_index=True)
     paid_up_capital = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
     authorized_capital = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
@@ -100,7 +100,7 @@ class MCADirectorEntry(models.Model):
     )
     director_name = models.CharField(max_length=255, db_index=True)
     director_email = models.CharField(max_length=255, blank=True, db_index=True)
-    raw_mobile = models.CharField(max_length=128, blank=True, help_text="Exact source phone cell value (original_phone)")
+    raw_mobile = models.CharField(max_length=255, blank=True, help_text="Exact source phone cell value (original_phone)")
     canonical_mobile = models.CharField(
         max_length=10,
         null=True,
@@ -116,7 +116,7 @@ class MCADirectorEntry(models.Model):
         help_text="phone_status: valid, cleaned, missing, invalid, multiple_numbers_review"
     )
     designation = models.CharField(
-        max_length=64,
+        max_length=255,
         default='Unknown',
         blank=True,
         help_text="Director, Designated Partner, or Unknown"
@@ -199,18 +199,18 @@ class GSTRecord(models.Model):
     trade_name = models.CharField(max_length=255, blank=True, db_index=True)
     nature_of_business = models.TextField(blank=True)
     source_type = models.CharField(
-        max_length=64,
+        max_length=255,
         blank=True,
         db_index=True,
         help_text="Source 'type' column (e.g. REG)"
     )
     registration_date = models.DateField(null=True, blank=True, db_index=True)
-    gst_type = models.CharField(max_length=64, blank=True, db_index=True)
-    status = models.CharField(max_length=64, blank=True, db_index=True, help_text="Source status code (e.g. ACT)")
-    jurisdiction = models.CharField(max_length=128, blank=True)
-    state_jurisdiction = models.CharField(max_length=128, blank=True)
+    gst_type = models.CharField(max_length=255, blank=True, db_index=True)
+    status = models.CharField(max_length=255, blank=True, db_index=True, help_text="Source status code (e.g. ACT)")
+    jurisdiction = models.CharField(max_length=255, blank=True)
+    state_jurisdiction = models.CharField(max_length=255, blank=True)
     pan = models.CharField(max_length=32, blank=True, db_index=True)
-    raw_mobile = models.CharField(max_length=128, blank=True, help_text="Exact source phone cell value (original_phone)")
+    raw_mobile = models.CharField(max_length=255, blank=True, help_text="Exact source phone cell value (original_phone)")
     canonical_mobile = models.CharField(
         max_length=10,
         null=True,
@@ -312,12 +312,15 @@ class ImportBatch(models.Model):
     STATUS_CHOICES = [
         ('UPLOADED', 'Uploaded'),
         ('MAPPED', 'Mapped'),
+        ('QUEUED', 'Queued for processing'),
+        ('PROCESSING', 'Processing'),
         ('STAGED', 'Staged & Validated'),
         ('PREVIEWED', 'Preview Ready'),
         ('IMPORTING', 'Importing'),
         ('COMPLETED', 'Completed'),
         ('PARTIAL', 'Completed with Issues'),
         ('FAILED', 'Failed'),
+        ('CANCELLED', 'Cancelled'),
     ]
 
     id = models.BigAutoField(primary_key=True)
@@ -344,6 +347,8 @@ class ImportBatch(models.Model):
     mapping_config = models.JSONField(default=dict, blank=True)
     cleaning_summary = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
+    checkpoint_row = models.PositiveIntegerField(default=0, help_text="Durable checkpoint row offset for publication crash recovery")
+    retry_count = models.PositiveIntegerField(default=0)
     
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -366,7 +371,8 @@ class ImportBatch(models.Model):
 class StagedRow(models.Model):
     """
     Preserves raw and cleaned data for each row during the import staging lifecycle.
-    Never silently discards rows.
+    Never silently discards rows. Includes indexed entity and phone columns for
+    fast, database-side deduplication and zero-RAM join lookups in PostgreSQL.
     """
     ACTION_CHOICES = [
         ('CREATE', 'Create New'),
@@ -385,13 +391,15 @@ class StagedRow(models.Model):
     id = models.BigAutoField(primary_key=True)
     batch = models.ForeignKey(ImportBatch, on_delete=models.CASCADE, related_name='staged_rows')
     row_number = models.PositiveIntegerField(db_index=True)
+    entity_identifier = models.CharField(max_length=64, blank=True, db_index=True, help_text="Indexed entity ID (CIN, LLPIN, GSTIN)")
+    canonical_mobile = models.CharField(max_length=10, blank=True, db_index=True, help_text="Indexed 10-digit phone for DB grouping")
     raw_data = models.JSONField(default=dict)
     cleaned_data = models.JSONField(default=dict)
     proposed_action = models.CharField(max_length=32, choices=ACTION_CHOICES, default='CREATE')
     validation_status = models.CharField(max_length=32, choices=STATUS_CHOICES, default='VALID')
     validation_messages = models.JSONField(default=list, blank=True)
     diff_summary = models.JSONField(default=dict, blank=True)
-    is_processed = models.BooleanField(default=False)
+    is_processed = models.BooleanField(default=False, db_index=True)
     processed_record_id = models.CharField(max_length=128, blank=True)
 
     class Meta:
@@ -400,6 +408,9 @@ class StagedRow(models.Model):
         ordering = ['batch', 'row_number']
         indexes = [
             models.Index(fields=['batch', 'row_number']),
+            models.Index(fields=['batch', 'is_processed']),
+            models.Index(fields=['batch', 'entity_identifier']),
+            models.Index(fields=['batch', 'canonical_mobile']),
             models.Index(fields=['validation_status']),
         ]
 
@@ -427,10 +438,10 @@ class QualityIssue(models.Model):
     batch = models.ForeignKey(ImportBatch, on_delete=models.SET_NULL, null=True, blank=True, related_name='quality_issues')
     record_id = models.BigIntegerField(null=True, blank=True, help_text="ID of created record if saved")
     record_type = models.CharField(max_length=32, choices=RECORD_TYPE_CHOICES, db_index=True)
-    entity_identifier = models.CharField(max_length=128, db_index=True, help_text="CIN, LLPIN, or GSTIN")
-    field_name = models.CharField(max_length=64, db_index=True)
+    entity_identifier = models.CharField(max_length=255, db_index=True, help_text="CIN, LLPIN, or GSTIN")
+    field_name = models.CharField(max_length=128, db_index=True)
     raw_value = models.TextField(blank=True)
-    error_code = models.CharField(max_length=64, db_index=True)
+    error_code = models.CharField(max_length=128, db_index=True)
     reason_description = models.TextField()
     is_resolved = models.BooleanField(default=False, db_index=True)
     resolved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='resolved_issues')

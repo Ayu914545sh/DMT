@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'whitenoise.runserver_nostatic',
     'django.contrib.staticfiles',
     'django.contrib.postgres',
+    'django.contrib.humanize',
     # Third-party apps
     'import_export',
     # Local apps
@@ -129,9 +130,24 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# File upload limits
-DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100 MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100 MB
+# File upload limits (Supports up to 1 GB)
+MAX_UPLOAD_SIZE = 1024 * 1024 * 1024  # 1 GB in bytes
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10 MB in memory, stream anything larger directly to disk
+FILE_UPLOAD_MAX_NUMBER_FIELDS = 10000
+FILE_UPLOAD_HANDLERS = [
+    'django.core.files.uploadhandler.MemoryFileUploadHandler',
+    'django.core.files.uploadhandler.TemporaryFileUploadHandler',
+]
+
+# Large-Scale Data Processing & Bounded-Memory Architecture Settings
+IMPORT_CHUNK_SIZE = int(os.environ.get('IMPORT_CHUNK_SIZE', '5000'))
+IMPORT_BATCH_SIZE = int(os.environ.get('IMPORT_BATCH_SIZE', '2000'))
+EXPORT_CHUNK_SIZE = int(os.environ.get('EXPORT_CHUNK_SIZE', '5000'))
+IMPORT_MAX_CONCURRENT_JOBS = int(os.environ.get('IMPORT_MAX_CONCURRENT_JOBS', '1'))
+IMPORT_RETRY_LIMIT = int(os.environ.get('IMPORT_RETRY_LIMIT', '3'))
+XLS_MAX_FILE_SIZE_MB = int(os.environ.get('XLS_MAX_FILE_SIZE_MB', '50'))
+
 
 # Authentication redirects
 LOGIN_URL = '/login/'
@@ -145,7 +161,8 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
-# In local/testing mode where Redis might not run, run tasks synchronously (eager)
+# Celery execution mode (CELERY_TASK_ALWAYS_EAGER=True runs inline synchronously in test/dev)
+USE_CELERY = os.environ.get('USE_CELERY', 'True').lower() in ('true', '1')
 CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_ALWAYS_EAGER', 'True') == 'True'
 CELERY_TASK_EAGER_PROPAGATES = True
 

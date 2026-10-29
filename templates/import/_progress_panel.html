@@ -1,0 +1,280 @@
+{% load humanize %}
+
+<!-- Reusable Live Progress Component for DMT Import Pipeline -->
+<div class="progress-panel-component" id="progressPanelComponent" data-batch-id="{{ batch.batch_id }}">
+    <!-- Dynamic Stepper Navigation -->
+    <div class="stepper-nav mb-4" id="stepperNavContainer">
+        <div class="stepper-step completed" id="step1Nav">
+            <span class="stepper-circle"><i class="bi bi-check"></i></span>
+            <span>Upload File</span>
+        </div>
+        <div class="stepper-step completed" id="step2Nav">
+            <span class="stepper-circle"><i class="bi bi-check"></i></span>
+            <span>Column Mapping</span>
+        </div>
+        <div class="stepper-step {% if progress.step == 4 or progress.status == 'COMPLETED' %}completed{% else %}active{% endif %}" id="step3Nav">
+            <span class="stepper-circle">
+                {% if progress.step == 4 or progress.status == 'COMPLETED' %}
+                <i class="bi bi-check"></i>
+                {% else %}
+                3
+                {% endif %}
+            </span>
+            <span>Preview & Validation</span>
+        </div>
+        <div class="stepper-step {% if progress.status == 'COMPLETED' %}completed{% elif progress.step == 4 %}active{% endif %}" id="step4Nav">
+            <span class="stepper-circle">
+                {% if progress.status == 'COMPLETED' %}
+                <i class="bi bi-check"></i>
+                {% else %}
+                4
+                {% endif %}
+            </span>
+            <span>Publish to DB</span>
+        </div>
+    </div>
+
+    <!-- Live Progress Card -->
+    <div class="card card-custom p-4 shadow-sm mb-4" id="progressCard">
+        <div class="d-flex align-items-center justify-content-between pb-3 mb-4 border-bottom flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-3">
+                <div class="rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center" style="width: 48px; height: 48px;" id="statusIconBox">
+                    <span class="spinner-border spinner-border-sm text-primary" role="status" id="mainSpinner"></span>
+                    <i class="bi bi-check-lg fs-4 d-none text-success" id="mainSuccessIcon"></i>
+                    <i class="bi bi-exclamation-triangle-fill fs-4 d-none text-danger" id="mainErrorIcon"></i>
+                </div>
+                <div>
+                    <h5 class="fw-bold mb-0" id="mainStageTitle">{{ progress.stage|default:"Processing Import" }}</h5>
+                    <p class="text-muted small mb-0 font-monospace">Batch: {{ batch.batch_id }} &bull; {{ batch.dataset_type }} &bull; {{ batch.file_name }}</p>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-light text-secondary border px-2 py-1 small fw-semibold" id="operationStatusBadge">
+                    {{ progress.status|default:"PROCESSING" }}
+                </span>
+                <button type="button" class="btn btn-outline-danger btn-sm fw-semibold" id="cancelJobBtn" title="Cancel this import">
+                    <i class="bi bi-x-circle me-1"></i> Cancel Job
+                </button>
+            </div>
+        </div>
+
+        <!-- Connection Reconnecting Alert Banner -->
+        <div id="reconnectBanner" class="alert alert-warning border-warning-subtle py-2 px-3 small d-none align-items-center gap-2 mb-3" role="alert">
+            <span class="spinner-border spinner-border-sm text-warning" role="status"></span>
+            <span>Reconnecting to live progress updates... (the server is continuing your job)</span>
+        </div>
+
+        <!-- Stage Notification Banner -->
+        <div class="alert alert-info border-info-subtle py-2 px-3 small d-flex align-items-center justify-content-between mb-4" id="stageBanner">
+            <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-info-circle-fill text-info" id="stageBannerIcon"></i>
+                <span id="stageBannerText" class="fw-medium">{{ progress.message|default:"Validating data and cleaning columns..." }}</span>
+            </div>
+            <span class="badge bg-light text-dark border font-monospace" id="batchFormatBadge">{{ batch.file_format }}</span>
+        </div>
+
+        <!-- Progress Bar Section -->
+        <div class="mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="small fw-semibold text-secondary" id="progressStageLabel">{{ progress.stage }}</span>
+                <span class="small fw-bold font-monospace" id="progressPercentageLabel">
+                    {% if progress.percentage is not None %}{{ progress.percentage|floatformat:1 }}%{% else %}Processing...{% endif %}
+                </span>
+            </div>
+            <div class="progress" style="height: 12px; border-radius: 6px; background-color: #e2e8f0;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                     role="progressbar" 
+                     id="mainProgressBar"
+                     style="width: {% if progress.percentage is not None %}{{ progress.percentage }}{% else %}100{% endif %}%;"
+                     aria-valuenow="{% if progress.percentage is not None %}{{ progress.percentage }}{% else %}0{% endif %}" 
+                     aria-valuemin="0" 
+                     aria-valuemax="100">
+                </div>
+            </div>
+            <div class="small text-muted mt-1 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span id="progressRowCountText">
+                    {% if progress.total_rows %}
+                    {{ progress.processed_rows|default:0|intcomma }} of {{ progress.total_rows|intcomma }} {{ progress.unit|default:"rows" }} processed
+                    {% else %}
+                    {{ progress.processed_rows|default:0|intcomma }} {{ progress.unit|default:"rows" }} processed
+                    {% endif %}
+                </span>
+                <span id="progressRateText" class="font-monospace text-primary fw-medium">
+                    {{ progress.speed_formatted|default:"" }}
+                </span>
+            </div>
+        </div>
+
+        <!-- KPI Metrics Grid (4 columns) -->
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-3 bg-light text-center h-100">
+                    <div class="text-muted small fw-semibold text-uppercase" id="kpi1Title">
+                        {% if progress.step == 4 %}Committed Rows{% else %}Processed Rows{% endif %}
+                    </div>
+                    <div class="fs-4 fw-bold text-dark mt-1" id="processedCountDisplay">{{ progress.processed_rows|default:0|intcomma }}</div>
+                    <div class="small text-muted" id="totalRowsSubtext">
+                        {% if progress.total_rows %}of {{ progress.total_rows|intcomma }} total{% else %}total unknown{% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-3 bg-light text-center h-100">
+                    <div class="text-muted small fw-semibold text-uppercase" id="kpi2Title">
+                        {% if progress.step == 4 %}Entities Created{% else %}Validation Failures{% endif %}
+                    </div>
+                    <div class="fs-4 fw-bold {% if progress.step == 4 %}text-success{% else %}text-warning{% endif %} mt-1" id="kpi2Value">
+                        {% if progress.step == 4 %}
+                            {% if batch.dataset_type == 'GST' %}
+                                {{ progress.db_stats.gst_created|default:0|intcomma }}
+                            {% else %}
+                                {{ progress.db_stats.companies_created|default:0|intcomma }}
+                            {% endif %}
+                        {% else %}
+                            {{ progress.validation_failures|default:0|intcomma }}
+                        {% endif %}
+                    </div>
+                    <div class="small text-muted" id="kpi2Subtext">
+                        {% if progress.step == 4 %}Database writes{% else %}Flagged / Invalid{% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-3 bg-light text-center h-100">
+                    <div class="text-muted small fw-semibold text-uppercase">Elapsed Time</div>
+                    <div class="fs-4 fw-bold text-dark font-monospace mt-1" id="elapsedDisplay">{{ progress.elapsed_formatted|default:"00:00" }}</div>
+                    <div class="small text-muted" id="elapsedSubtext">Active duration</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="border rounded-3 p-3 bg-light text-center h-100">
+                    <div class="text-muted small fw-semibold text-uppercase" id="etaTitle">Estimated Remaining</div>
+                    <div class="fs-4 fw-bold text-primary font-monospace mt-1" id="etaDisplay">{{ progress.eta_formatted|default:"--" }}</div>
+                    <div class="small text-muted" id="etaSubtext">Smoothed ETA</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Database Breakdown Grid (Shown during & after publishing step) -->
+        <div id="dbStatsBreakdown" class="{% if progress.step != 4 and progress.status != 'COMPLETED' %}d-none{% endif %} mb-4 p-3 bg-light rounded-3 border">
+            <h6 class="fw-bold small text-secondary mb-2"><i class="bi bi-database-check me-1 text-primary"></i>Database Entities Committed</h6>
+            <div class="row g-2 text-center small">
+                {% if batch.dataset_type == 'MCA' %}
+                <div class="col-3">
+                    <div class="p-2 bg-white rounded border">
+                        <div class="text-muted fs-8">Companies Created</div>
+                        <strong class="text-success fs-6" id="dbCompCreated">{{ progress.db_stats.companies_created|default:0|intcomma }}</strong>
+                    </div>
+                </div>
+                <div class="col-3">
+                    <div class="p-2 bg-white rounded border">
+                        <div class="text-muted fs-8">Companies Updated</div>
+                        <strong class="text-primary fs-6" id="dbCompUpdated">{{ progress.db_stats.companies_updated|default:0|intcomma }}</strong>
+                    </div>
+                </div>
+                <div class="col-3">
+                    <div class="p-2 bg-white rounded border">
+                        <div class="text-muted fs-8">Directors Created</div>
+                        <strong class="text-success fs-6" id="dbDirCreated">{{ progress.db_stats.directors_created|default:0|intcomma }}</strong>
+                    </div>
+                </div>
+                <div class="col-3">
+                    <div class="p-2 bg-white rounded border">
+                        <div class="text-muted fs-8">Issues Flagged</div>
+                        <strong class="text-warning fs-6" id="dbIssues">{{ progress.db_stats.issues_created|default:0|intcomma }}</strong>
+                    </div>
+                </div>
+                {% else %}
+                <div class="col-4">
+                    <div class="p-2 bg-white rounded border">
+                        <div class="text-muted fs-8">GST Records Created</div>
+                        <strong class="text-success fs-6" id="dbGstCreated">{{ progress.db_stats.gst_created|default:0|intcomma }}</strong>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="p-2 bg-white rounded border">
+                        <div class="text-muted fs-8">GST Records Updated</div>
+                        <strong class="text-primary fs-6" id="dbGstUpdated">{{ progress.db_stats.gst_updated|default:0|intcomma }}</strong>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="p-2 bg-white rounded border">
+                        <div class="text-muted fs-8">Issues Flagged</div>
+                        <strong class="text-warning fs-6" id="dbIssues">{{ progress.db_stats.issues_created|default:0|intcomma }}</strong>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Completion Actions Area -->
+        <div id="completionActionsArea" class="{% if not progress.is_completed %}d-none{% endif %} pt-3 border-top">
+            <div class="alert alert-success border-success-subtle mb-3 d-flex align-items-center gap-2" id="completionAlertBanner">
+                <i class="bi bi-check-circle-fill text-success fs-4"></i>
+                <div>
+                    <strong id="completionTitleText">
+                        {% if progress.status == 'COMPLETED' %}
+                        Database Publishing Complete!
+                        {% else %}
+                        Staging and Validation Complete!
+                        {% endif %}
+                    </strong>
+                    <div class="small" id="completionSubtext">
+                        {% if progress.status == 'COMPLETED' %}
+                        All validated source records have been safely committed into the authoritative database.
+                        {% else %}
+                        Cleaned candidate rows and validation diagnostics are ready for preview inspection.
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2" id="completionActionButtons">
+                <!-- If completed step 3 (Preview ready) -->
+                <div id="step3CompletionButtons" class="{% if progress.status == 'COMPLETED' %}d-none{% endif %} d-flex flex-wrap align-items-center justify-content-between w-100 gap-2">
+                    <div class="btn-group">
+                        <a href="{% url 'hub:download_cleaning_report' batch.batch_id %}" class="btn btn-outline-primary btn-sm fw-semibold">
+                            <i class="bi bi-file-earmark-arrow-down me-1"></i> Download Cleaning Report
+                        </a>
+                        <a href="{% url 'hub:download_cleaned_file' batch.batch_id %}" class="btn btn-outline-secondary btn-sm fw-semibold">
+                            <i class="bi bi-file-earmark-spreadsheet me-1"></i> Download Cleaned CSV
+                        </a>
+                    </div>
+                    <a href="{% url 'hub:import_preview' batch.batch_id %}" class="btn btn-primary fw-semibold px-4 shadow-sm" id="continuePreviewBtn">
+                        Proceed to Preview & Validation <i class="bi bi-arrow-right ms-1"></i>
+                    </a>
+                </div>
+
+                <!-- If completed step 4 (Database Publishing complete) -->
+                <div id="step4CompletionButtons" class="{% if progress.status != 'COMPLETED' %}d-none{% endif %} d-flex flex-wrap align-items-center justify-content-between w-100 gap-2">
+                    <a href="{% url 'hub:import_batch_detail' batch.batch_id %}" class="btn btn-outline-secondary btn-sm fw-semibold">
+                        <i class="bi bi-file-earmark-text me-1"></i> View Batch Audit & Detail
+                    </a>
+                    <a href="{% if batch.dataset_type == 'GST' %}{% url 'hub:gst_list' %}{% else %}{% url 'hub:mca_list' %}{% endif %}" class="btn btn-success fw-semibold px-4 shadow-sm">
+                        <i class="bi bi-check-circle-fill me-1"></i> View Ingested Database Records &rarr;
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Failure Actions Area -->
+        <div id="errorActionsArea" class="{% if not progress.is_failed %}d-none{% endif %} pt-3 border-top">
+            <div class="alert alert-danger border-danger-subtle mb-3 d-flex align-items-start gap-2">
+                <i class="bi bi-exclamation-octagon-fill text-danger fs-5 flex-shrink-0 mt-1"></i>
+                <div>
+                    <strong>Processing Failed:</strong>
+                    <div id="errorMessageDisplay" class="mt-1 small">{{ progress.error_message|default:"An error occurred during dataset processing." }}</div>
+                </div>
+            </div>
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <a href="{% url 'hub:import_map' batch.batch_id %}" class="btn btn-outline-secondary btn-sm fw-semibold">
+                    <i class="bi bi-arrow-left me-1"></i> Adjust Column Mapping
+                </a>
+                <a href="{% url 'hub:import_upload' %}" class="btn btn-primary btn-sm fw-semibold">
+                    Upload New Dataset
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+

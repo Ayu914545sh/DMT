@@ -32,6 +32,34 @@
         background-color: #fff;
         border-color: #cbd5e1;
     }
+    .row-excluded {
+        opacity: 0.52;
+        background-color: #f8fafc;
+    }
+    .row-excluded .mapping-select {
+        background-color: #e2e8f0;
+        cursor: not-allowed;
+        color: #64748b;
+    }
+    .badge-skipped {
+        background-color: #fef3c7;
+        color: #92400e;
+        border: 1px solid #fde68a;
+    }
+    .badge-excluded {
+        background-color: #f1f5f9;
+        color: #64748b;
+        border: 1px solid #cbd5e1;
+    }
+    .col-id-tag {
+        font-size: 0.7rem;
+        font-family: monospace;
+        color: #94a3b8;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        padding: 0.05rem 0.35rem;
+        border-radius: 4px;
+    }
 </style>
 {% endblock %}
 
@@ -57,6 +85,25 @@
         </div>
     </div>
 
+    <!-- Operation Status: Waiting for Column Mapping -->
+    <div class="card card-custom p-3 mb-4 bg-white shadow-sm border-start border-4 border-info">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-3">
+                <div class="rounded-circle bg-info-subtle text-info d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
+                    <i class="bi bi-clock-history fs-5"></i>
+                </div>
+                <div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-info-subtle text-info border border-info-subtle fw-semibold">Waiting for input</span>
+                        <h6 class="fw-bold mb-0">Waiting for column mapping</h6>
+                    </div>
+                    <small class="text-muted">Headers detected and preview samples loaded. Review or adjust column selections and target mappings. Processing time estimates are paused while waiting for your review.</small>
+                </div>
+            </div>
+            <span class="badge bg-light text-secondary border font-monospace">{{ batch.batch_id }}</span>
+        </div>
+    </div>
+
     <!-- Batch Summary Banner -->
     <div class="card card-custom p-3 mb-4 bg-light">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
@@ -67,10 +114,10 @@
                 <strong>{{ batch.file_name }}</strong>
                 <span class="text-muted small ms-2">({{ batch.file_format }}{% if batch.sheet_name %}, Sheet: {{ batch.sheet_name }}{% endif %})</span>
                 {% if available_sheets and available_sheets|length > 1 %}
-                <form method="post" class="d-inline-flex align-items-center gap-1 ms-2">
+                <form method="post" class="d-inline-flex align-items-center gap-1 ms-2" id="switchSheetForm">
                     {% csrf_token %}
                     <span class="text-muted small fw-semibold">Sheet:</span>
-                    <select name="switch_sheet" class="form-select form-select-sm py-0" style="width: auto; font-size: 0.8rem;" onchange="this.form.submit();">
+                    <select name="switch_sheet" class="form-select form-select-sm py-0" style="width: auto; font-size: 0.8rem;" id="sheetSelectDropdown">
                         {% for s in available_sheets %}
                         <option value="{{ s }}" {% if batch.sheet_name == s %}selected{% endif %}>{{ s }}</option>
                         {% endfor %}
@@ -133,7 +180,7 @@
             <div class="card-header-custom d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
                     <h6 class="fw-bold mb-0">Review & Adjust Column Mappings</h6>
-                    <small class="text-muted">Map your source headers to target database fields. Unmapped fields are safely preserved in JSON.</small>
+                    <small class="text-muted">Choose which columns to include. Only checked columns will be cleaned, validated, stored in database records, or exported. Unchecked columns are completely excluded and omitted everywhere. Checked unmapped columns are safely preserved in extra JSON.</small>
                 </div>
                 <div class="d-flex align-items-center gap-2">
                     {% if batch.dataset_type == 'MCA' %}
@@ -148,33 +195,87 @@
                 </div>
             </div>
 
+            <!-- Selection Controls Toolbar -->
+            <div class="px-3 py-2 bg-light border-bottom d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" id="btnSelectAll">
+                        <i class="bi bi-check-all me-1"></i>Select All
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary fw-semibold" id="btnClearSelection">
+                        <i class="bi bi-x-circle me-1"></i>Clear Selection
+                    </button>
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2 py-1 fs-7 fw-bold" id="selectionCountBadge">
+                        <span id="selectedCountNum">{{ selected_count }}</span> of <span id="totalCountNum">{{ total_count }}</span> columns selected
+                    </span>
+                </div>
+                <div id="mandatoryNotice" class="alert alert-info py-1 px-3 mb-0 small d-none align-items-center shadow-none border-info-subtle">
+                    <i class="bi bi-info-circle-fill me-2 text-info"></i>
+                    <span>Optional columns cleared. <strong>{% if batch.dataset_type == 'MCA' %}entityId (CIN/LLPIN){% else %}gst_number (GSTIN){% endif %}</strong> remains selected because it is mandatory for database publishing.</span>
+                </div>
+            </div>
+
             <!-- Table Header -->
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0" id="mappingTable">
                     <thead class="table-light text-uppercase fs-8 text-secondary">
                         <tr>
+                            <th style="width: 5%;" class="text-center">
+                                <div class="form-check d-flex justify-content-center m-0">
+                                    <input class="form-check-input" type="checkbox" id="selectAllCheckbox" title="Select / Deselect All Optional Columns" {% if selected_count == total_count %}checked{% endif %}>
+                                </div>
+                                <span class="d-block text-secondary mt-1" style="font-size: 0.65rem;">Include</span>
+                            </th>
                             <th style="width: 32%;">Source Column & Samples</th>
                             <th style="width: 4%;" class="text-center"></th>
-                            <th style="width: 44%;">Target Database Field</th>
+                            <th style="width: 39%;">Target Database Field</th>
                             <th style="width: 20%;" class="text-center">Mapping Status</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for header in headers %}
-                        {% with cur_mapped=suggested_mapping|dictsort:header|default:suggested_mapping|get_item:header %}
-                        <tr class="header-mapping-row" data-header="{{ header|lower }}">
+                        {% for item in column_items %}
+                        <tr class="header-mapping-row {% if not item.is_selected %}row-excluded{% endif %}" 
+                            data-header="{{ item.header|lower }}" 
+                            data-col-id="{{ item.id }}" 
+                            id="row_{{ item.id }}">
+                            <td class="text-center align-middle">
+                                <div class="form-check d-flex justify-content-center m-0">
+                                    {% if item.is_required %}
+                                        <input type="checkbox" 
+                                               class="form-check-input col-include-checkbox" 
+                                               name="selected_columns" 
+                                               value="{{ item.header }}" 
+                                               data-col-id="{{ item.id }}" 
+                                               checked 
+                                               disabled 
+                                               title="Mandatory primary identity field for database publishing">
+                                        <input type="hidden" name="selected_columns" value="{{ item.header }}">
+                                    {% else %}
+                                        <input type="checkbox" 
+                                               class="form-check-input col-include-checkbox" 
+                                               name="selected_columns" 
+                                               value="{{ item.header }}" 
+                                               data-col-id="{{ item.id }}" 
+                                               {% if item.is_selected %}checked{% endif %} 
+                                               title="Include this column in import processing">
+                                    {% endif %}
+                                </div>
+                            </td>
                             <td>
-                                <div class="font-monospace fw-bold text-dark mb-1">{{ header }}</div>
+                                <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+                                    <span class="font-monospace fw-bold text-dark">{{ item.header }}</span>
+                                    <span class="col-id-tag">{{ item.id }}</span>
+                                    {% if item.is_required %}
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle fs-8">Mandatory</span>
+                                    {% endif %}
+                                </div>
                                 <div class="samples-container">
-                                    {% with samples_list=column_samples|get_item:header %}
-                                        {% if samples_list %}
-                                            {% for sample in samples_list %}
-                                                <span class="sample-pill" title="{{ sample }}">{{ sample }}</span>
-                                            {% endfor %}
-                                        {% else %}
-                                            <span class="text-muted fst-italic small">No non-empty samples</span>
-                                        {% endif %}
-                                    {% endwith %}
+                                    {% if item.samples %}
+                                        {% for sample in item.samples %}
+                                            <span class="sample-pill" title="{{ sample }}">{{ sample }}</span>
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-muted fst-italic small">No non-empty samples</span>
+                                    {% endif %}
                                 </div>
                             </td>
                             <td class="text-center text-muted">
@@ -182,15 +283,22 @@
                             </td>
                             <td>
                                 <div class="d-flex flex-column gap-1">
-                                    <select name="map_{{ header }}" class="form-select form-select-sm mapping-select" data-source="{{ header }}" id="select_map_{{ forloop.counter }}">
+                                    <select name="map_{{ item.header }}" 
+                                            class="form-select form-select-sm mapping-select" 
+                                            data-source="{{ item.header }}" 
+                                            data-col-id="{{ item.id }}" 
+                                            id="select_map_{{ forloop.counter }}" 
+                                            data-prev-mapping="{{ item.cur_mapped }}"
+                                            {% if not item.is_selected %}disabled{% endif %}>
                                         <option value="">-- Preserve in Extra JSON (Unmapped) --</option>
                                         {% for canonical_field in canonical_schema.keys %}
-                                        <option value="{{ canonical_field }}" {% if cur_mapped == canonical_field %}selected{% endif %}>
+                                        <option value="{{ canonical_field }}" {% if item.cur_mapped == canonical_field %}selected{% endif %}>
                                             {% if canonical_field == 'gst_number' %}gstin / gst_number * (Required)
                                             {% elif canonical_field == 'entityId' %}entityId (CIN/LLPIN) * (Required)
                                             {% elif canonical_field == 'mobile' %}mobile_number / mobile
                                             {% elif canonical_field == 'Pincode' %}pincode / Pincode
                                             {% elif canonical_field == 'directorMobile' %}directorMobile / mobile
+                                            {% elif canonical_field == 'skip' %}skip (Exclude / Serial Number)
                                             {% else %}{{ canonical_field }}{% endif %}
                                         </option>
                                         {% endfor %}
@@ -198,11 +306,19 @@
                                 </div>
                             </td>
                             <td class="text-center status-col">
-                                {% if cur_mapped == 'entityId' or cur_mapped == 'gst_number' %}
+                                {% if not item.is_selected %}
+                                    <span class="badge badge-excluded field-status-badge">
+                                        <i class="bi bi-slash-circle me-1"></i>Excluded
+                                    </span>
+                                {% elif item.cur_mapped == 'entityId' or item.cur_mapped == 'gst_number' or item.is_required %}
                                     <span class="badge bg-success-subtle text-success border border-success-subtle field-status-badge">
                                         <i class="bi bi-check-circle-fill me-1"></i>Required Mapped
                                     </span>
-                                {% elif cur_mapped %}
+                                {% elif item.cur_mapped == 'skip' %}
+                                    <span class="badge badge-skipped field-status-badge">
+                                        <i class="bi bi-skip-forward-circle me-1"></i>Skipped
+                                    </span>
+                                {% elif item.cur_mapped %}
                                     <span class="badge bg-primary-subtle text-primary border border-primary-subtle field-status-badge">
                                         <i class="bi bi-check2 me-1"></i>Mapped
                                     </span>
@@ -213,7 +329,6 @@
                                 {% endif %}
                             </td>
                         </tr>
-                        {% endwith %}
                         {% endfor %}
                     </tbody>
                 </table>
@@ -257,21 +372,172 @@
 document.addEventListener('DOMContentLoaded', function() {
     const requiredTarget = "{% if batch.dataset_type == 'MCA' %}entityId{% else %}gst_number{% endif %}";
     const mappingSelects = document.querySelectorAll('.mapping-select');
+    const includeCheckboxes = document.querySelectorAll('.col-include-checkbox');
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    const btnSelectAll = document.getElementById('btnSelectAll');
+    const btnClearSelection = document.getElementById('btnClearSelection');
+    const selectedCountNum = document.getElementById('selectedCountNum');
+    const totalCountNum = document.getElementById('totalCountNum');
+    const mandatoryNotice = document.getElementById('mandatoryNotice');
     const filterInput = document.getElementById('filterHeadersInput');
     const rows = document.querySelectorAll('.header-mapping-row');
     const resetBtn = document.getElementById('resetMappingBtn');
     const templateSelector = document.getElementById('templateSelector');
     const applyTemplateBtn = document.getElementById('applyTemplateBtn');
+    const mappingForm = document.getElementById('mappingForm');
 
-    // Dynamic search filter across headers, mapped fields, and sample values
+    // Update selection counter and master checkbox
+    function updateCounter() {
+        const total = includeCheckboxes.length;
+        let checked = 0;
+        includeCheckboxes.forEach(cb => {
+            if (cb.checked) checked++;
+        });
+        if (selectedCountNum) selectedCountNum.textContent = checked;
+        if (totalCountNum) totalCountNum.textContent = total;
+        if (selectAllCheckbox) {
+            selectAllCheckbox.checked = (checked === total && total > 0);
+            selectAllCheckbox.indeterminate = (checked > 0 && checked < total);
+        }
+    }
+
+    // Update status badge on selection or checkbox change
+    function updateRowBadge(select) {
+        const tr = select.closest('tr');
+        const statusCol = tr.querySelector('.status-col');
+        const cb = tr.querySelector('.col-include-checkbox');
+        
+        if (cb && !cb.checked) {
+            statusCol.innerHTML = '<span class="badge badge-excluded field-status-badge"><i class="bi bi-slash-circle me-1"></i>Excluded</span>';
+            return;
+        }
+
+        const val = select.value;
+        if (val === requiredTarget || (requiredTarget === 'gst_number' && (val === 'gstin' || val === 'gst_number')) || (requiredTarget === 'entityId' && (val === 'cin' || val === 'entityId'))) {
+            statusCol.innerHTML = '<span class="badge bg-success-subtle text-success border border-success-subtle field-status-badge"><i class="bi bi-check-circle-fill me-1"></i>Required Mapped</span>';
+        } else if (val === 'skip') {
+            statusCol.innerHTML = '<span class="badge badge-skipped field-status-badge"><i class="bi bi-skip-forward-circle me-1"></i>Skipped</span>';
+        } else if (val) {
+            statusCol.innerHTML = '<span class="badge bg-primary-subtle text-primary border border-primary-subtle field-status-badge"><i class="bi bi-check2 me-1"></i>Mapped</span>';
+        } else {
+            statusCol.innerHTML = '<span class="badge bg-light text-secondary border field-status-badge"><i class="bi bi-dash-circle me-1"></i>Unmapped (JSON)</span>';
+        }
+    }
+
+    // Handle include checkbox changes
+    includeCheckboxes.forEach(cb => {
+        cb.addEventListener('change', function() {
+            const tr = this.closest('tr');
+            const select = tr.querySelector('.mapping-select');
+            if (this.checked) {
+                tr.classList.remove('row-excluded');
+                if (select) {
+                    select.disabled = false;
+                    const prev = select.getAttribute('data-prev-mapping');
+                    if (!select.value && prev) {
+                        select.value = prev;
+                    }
+                    updateRowBadge(select);
+                }
+            } else {
+                tr.classList.add('row-excluded');
+                if (select) {
+                    if (select.value) {
+                        select.setAttribute('data-prev-mapping', select.value);
+                    }
+                    select.disabled = true;
+                    updateRowBadge(select);
+                }
+            }
+            updateCounter();
+            validateDuplicates();
+        });
+    });
+
+    // "Select All" Button
+    if (btnSelectAll) {
+        btnSelectAll.addEventListener('click', function() {
+            if (mandatoryNotice) {
+                mandatoryNotice.classList.add('d-none');
+                mandatoryNotice.classList.remove('d-flex');
+            }
+            rows.forEach(tr => {
+                const cb = tr.querySelector('.col-include-checkbox');
+                const select = tr.querySelector('.mapping-select');
+                if (cb) {
+                    cb.checked = true;
+                }
+                tr.classList.remove('row-excluded');
+                if (select) {
+                    select.disabled = false;
+                    const prev = select.getAttribute('data-prev-mapping');
+                    if (!select.value && prev) {
+                        select.value = prev;
+                    }
+                    updateRowBadge(select);
+                }
+            });
+            updateCounter();
+            validateDuplicates();
+        });
+    }
+
+    // "Clear Selection" Button (clears optional columns, retains mandatory with notice)
+    if (btnClearSelection) {
+        btnClearSelection.addEventListener('click', function() {
+            rows.forEach(tr => {
+                const cb = tr.querySelector('.col-include-checkbox');
+                const select = tr.querySelector('.mapping-select');
+                // Retain required/mandatory column
+                if (cb && cb.disabled) {
+                    cb.checked = true;
+                    tr.classList.remove('row-excluded');
+                    if (select) {
+                        select.disabled = false;
+                        updateRowBadge(select);
+                    }
+                } else if (cb) {
+                    cb.checked = false;
+                    tr.classList.add('row-excluded');
+                    if (select) {
+                        if (select.value) {
+                            select.setAttribute('data-prev-mapping', select.value);
+                        }
+                        select.disabled = true;
+                        updateRowBadge(select);
+                    }
+                }
+            });
+            if (mandatoryNotice) {
+                mandatoryNotice.classList.remove('d-none');
+                mandatoryNotice.classList.add('d-flex');
+            }
+            updateCounter();
+            validateDuplicates();
+        });
+    }
+
+    // Master Header Checkbox
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', function() {
+            if (this.checked) {
+                if (btnSelectAll) btnSelectAll.click();
+            } else {
+                if (btnClearSelection) btnClearSelection.click();
+            }
+        });
+    }
+
+    // Dynamic search filter across headers, IDs, mapped fields, and sample values
     if (filterInput) {
         filterInput.addEventListener('input', function() {
             const query = this.value.trim().toLowerCase();
             rows.forEach(row => {
                 const headerText = (row.getAttribute('data-header') || '').toLowerCase();
+                const colId = (row.getAttribute('data-col-id') || '').toLowerCase();
                 const selectVal = (row.querySelector('.mapping-select')?.value || '').toLowerCase();
                 const samplesText = (row.querySelector('.samples-container')?.textContent || '').toLowerCase();
-                if (!query || headerText.includes(query) || selectVal.includes(query) || samplesText.includes(query)) {
+                if (!query || headerText.includes(query) || colId.includes(query) || selectVal.includes(query) || samplesText.includes(query)) {
                     row.style.display = '';
                 } else {
                     row.style.display = 'none';
@@ -280,23 +546,9 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Update status badge on selection change
-    function updateRowBadge(select) {
-        const tr = select.closest('tr');
-        const statusCol = tr.querySelector('.status-col');
-        const val = select.value;
-
-        if (val === requiredTarget || (requiredTarget === 'gst_number' && (val === 'gstin' || val === 'gst_number')) || (requiredTarget === 'entityId' && (val === 'cin' || val === 'entityId'))) {
-            statusCol.innerHTML = '<span class="badge bg-success-subtle text-success border border-success-subtle field-status-badge"><i class="bi bi-check-circle-fill me-1"></i>Required Mapped</span>';
-        } else if (val) {
-            statusCol.innerHTML = '<span class="badge bg-primary-subtle text-primary border border-primary-subtle field-status-badge"><i class="bi bi-check2 me-1"></i>Mapped</span>';
-        } else {
-            statusCol.innerHTML = '<span class="badge bg-light text-secondary border field-status-badge"><i class="bi bi-dash-circle me-1"></i>Unmapped (JSON)</span>';
-        }
-    }
-
     mappingSelects.forEach(select => {
         select.addEventListener('change', function() {
+            select.setAttribute('data-prev-mapping', this.value);
             updateRowBadge(this);
             validateDuplicates();
         });
@@ -306,15 +558,25 @@ document.addEventListener('DOMContentLoaded', function() {
     function validateDuplicates() {
         const counts = {};
         mappingSelects.forEach(sel => {
+            const tr = sel.closest('tr');
+            const cb = tr ? tr.querySelector('.col-include-checkbox') : null;
+            if (cb && !cb.checked) return; // Do not count duplicates among excluded rows
             const val = sel.value;
-            if (val) {
+            if (val && val !== 'skip') {
                 counts[val] = (counts[val] || 0) + 1;
             }
         });
 
         mappingSelects.forEach(sel => {
+            const tr = sel.closest('tr');
+            const cb = tr ? tr.querySelector('.col-include-checkbox') : null;
+            if (cb && !cb.checked) {
+                sel.classList.remove('is-invalid');
+                sel.title = '';
+                return;
+            }
             const val = sel.value;
-            if (val && counts[val] > 1) {
+            if (val && val !== 'skip' && counts[val] > 1) {
                 sel.classList.add('is-invalid');
                 sel.title = 'Duplicate mapping: target field is mapped more than once!';
             } else {
@@ -325,6 +587,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     validateDuplicates();
+    updateCounter();
 
     // Reset Mapping button
     if (resetBtn) {
@@ -332,10 +595,33 @@ document.addEventListener('DOMContentLoaded', function() {
             if (confirm('Clear all mappings? Columns will default to unmapped (saved in extra JSON).')) {
                 mappingSelects.forEach(sel => {
                     sel.value = '';
+                    sel.setAttribute('data-prev-mapping', '');
                     updateRowBadge(sel);
                 });
                 validateDuplicates();
             }
+        });
+    }
+
+    // Loading Overlay Helper
+    const overlay = document.getElementById('mappingLoadingOverlay');
+    const overlayTitle = document.getElementById('overlayTitle');
+    const overlaySubtext = document.getElementById('overlaySubtext');
+
+    function showOverlay(title, subtext) {
+        if (!overlay) return;
+        if (overlayTitle && title) overlayTitle.textContent = title;
+        if (overlaySubtext && subtext) overlaySubtext.textContent = subtext;
+        overlay.classList.remove('d-none');
+    }
+
+    // Worksheet dropdown switch loading status
+    const sheetDropdown = document.getElementById('sheetSelectDropdown');
+    const switchSheetForm = document.getElementById('switchSheetForm');
+    if (sheetDropdown && switchSheetForm) {
+        sheetDropdown.addEventListener('change', function() {
+            showOverlay('Reading worksheet & headers...', 'Inspecting column headers and generating mapping suggestions for worksheet: ' + this.value);
+            switchSheetForm.submit();
         });
     }
 
@@ -347,9 +633,42 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Please select a mapping template first.');
                 return;
             }
+            showOverlay('Applying mapping template...', 'Re-evaluating column suggestions against saved template.');
             window.location.href = "{% url 'hub:import_map' batch.batch_id %}?use_template=" + encodeURIComponent(tmplId);
+        });
+    }
+
+    // Ensure required columns are selected and form validity checked before submit
+    if (mappingForm) {
+        mappingForm.addEventListener('submit', function(e) {
+            let checkedCount = 0;
+            includeCheckboxes.forEach(cb => {
+                if (cb.checked) checkedCount++;
+            });
+            if (checkedCount === 0) {
+                e.preventDefault();
+                alert('Please select at least one column to import.');
+                return false;
+            }
+
+            // Show immediate progress feedback on submit
+            const submitBtn = mappingForm.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> Staging & Validating...';
+            }
+            showOverlay('Saving column mappings & launching validation...', 'Staging selected columns, initializing cleaning rules, and preparing full-dataset validation.');
         });
     }
 });
 </script>
+
+<!-- Full-Screen Loading Overlay -->
+<div id="mappingLoadingOverlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-dark bg-opacity-50 d-flex flex-column align-items-center justify-content-center" style="z-index: 9999;">
+    <div class="card card-custom p-4 shadow-lg text-center bg-white" style="max-width: 440px;">
+        <div class="spinner-border text-primary mb-3 mx-auto" style="width: 3rem; height: 3rem;" role="status"></div>
+        <h5 class="fw-bold text-dark" id="overlayTitle">Reading worksheet & headers...</h5>
+        <p class="text-muted small mb-0" id="overlaySubtext">Inspecting column headers and generating mapping suggestions.</p>
+    </div>
+</div>
 {% endblock %}

@@ -5,7 +5,18 @@
 {% block content %}
 <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3 mb-4">
     <div>
-        <h4 class="fw-bold mb-1">Ingestion History</h4>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <h4 class="fw-bold mb-0">Import History</h4>
+            {% if eligible_count > 0 %}
+            <button type="button" class="btn btn-outline-danger btn-sm fw-semibold shadow-xs" data-bs-toggle="modal" data-bs-target="#clearHistoryModal" id="clearAllHistoryBtn" title="Clear all import history">
+                <i class="bi bi-trash3 me-1"></i>Clear All
+            </button>
+            {% else %}
+            <button type="button" class="btn btn-outline-danger btn-sm fw-semibold shadow-xs disabled opacity-50" id="clearAllHistoryBtn" disabled aria-disabled="true" title="No import history records available to clear">
+                <i class="bi bi-trash3 me-1"></i>Clear All
+            </button>
+            {% endif %}
+        </div>
         <p class="text-muted small mb-0">Audit of all uploaded datasets, staging runs, and publication outcomes.</p>
     </div>
     <a href="{% url 'hub:import_upload' %}" class="btn btn-primary btn-sm fw-semibold">
@@ -20,11 +31,11 @@
             <a href="{% url 'hub:import_history' %}?dataset=MCA" class="btn btn-sm btn-outline-secondary {% if dataset == 'MCA' %}active{% endif %}">MCA Only</a>
             <a href="{% url 'hub:import_history' %}?dataset=GST" class="btn btn-sm btn-outline-secondary {% if dataset == 'GST' %}active{% endif %}">GST Only</a>
         </div>
-        <div class="small text-muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+        <div class="small text-muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages|default:1 }}</div>
     </div>
 
     <div class="table-responsive">
-        <table class="table table-custom align-middle mb-0">
+        <table class="table table-custom align-middle mb-0" id="importHistoryTable">
             <thead>
                 <tr>
                     <th>Batch ID</th>
@@ -38,9 +49,9 @@
                     <th>Actions</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="importHistoryTableBody">
                 {% for batch in page_obj %}
-                <tr>
+                <tr data-batch-id="{{ batch.batch_id }}" id="batch-row-{{ batch.batch_id }}">
                     <td>
                         <a href="{% url 'hub:import_batch_detail' batch.batch_id %}" class="fw-bold font-monospace text-decoration-none">
                             {{ batch.batch_id }}
@@ -51,18 +62,38 @@
                             {{ batch.dataset_type }}
                         </span>
                     </td>
-                    <td class="text-truncate" style="max-width: 220px;">{{ batch.file_name }}</td>
+                    <td class="text-truncate" style="max-width: 220px;" title="{{ batch.file_name }}">{{ batch.file_name }}</td>
                     <td><span class="badge bg-light text-dark border">{{ batch.file_format }}</span></td>
-                    <td><strong>{{ batch.total_input_rows }}</strong></td>
-                    <td><strong class="text-success">{{ batch.imported_records }}</strong></td>
-                    <td>
-                        <span class="badge {% if batch.status == 'COMPLETED' %}bg-success{% elif batch.status == 'PREVIEWED' %}bg-warning text-dark{% elif batch.status == 'FAILED' %}bg-danger{% else %}bg-secondary{% endif %}">
-                            {{ batch.status }}
-                        </span>
+                    <td class="input-rows-cell">{{ batch.total_input_rows }}</td>
+                    <td class="committed-rows-cell"><strong class="text-success">{{ batch.imported_records }}</strong></td>
+                    <td class="status-cell" id="status-cell-{{ batch.batch_id }}">
+                        {% if batch.status == 'PROCESSING' or batch.status == 'QUEUED' or batch.status == 'IMPORTING' or batch.status == 'RUNNING' %}
+                        <a href="{% url 'hub:import_progress_page' batch.batch_id %}" class="text-decoration-none" title="Live import in progress. Click to view live progress.">
+                            <span class="badge bg-primary d-inline-flex align-items-center gap-1 shadow-xs">
+                                <span class="spinner-border spinner-border-sm" style="width: 0.7rem; height: 0.7rem;" role="status"></span>
+                                <span>{{ batch.status }}</span>
+                            </span>
+                        </a>
+                        {% elif batch.status == 'COMPLETED' %}
+                        <span class="badge bg-success">COMPLETED</span>
+                        {% elif batch.status == 'PREVIEWED' %}
+                        <span class="badge bg-info text-dark">PREVIEW READY</span>
+                        {% elif batch.status == 'FAILED' %}
+                        <span class="badge bg-danger" title="{{ batch.error_message }}">FAILED</span>
+                        {% elif batch.status == 'CANCELLED' %}
+                        <span class="badge bg-secondary">CANCELLED</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ batch.status }}</span>
+                        {% endif %}
                     </td>
                     <td class="text-muted small">{{ batch.created_at|date:"M d, Y H:i" }}</td>
                     <td>
                         <div class="btn-group btn-group-sm">
+                            {% if batch.status == 'PROCESSING' or batch.status == 'QUEUED' or batch.status == 'IMPORTING' %}
+                            <a href="{% url 'hub:import_progress_page' batch.batch_id %}" class="btn btn-outline-primary" title="View Live Progress">
+                                <i class="bi bi-activity"></i>
+                            </a>
+                            {% endif %}
                             <a href="{% url 'hub:import_batch_detail' batch.batch_id %}" class="btn btn-outline-secondary" title="View Detail">
                                 <i class="bi bi-eye"></i>
                             </a>
@@ -73,8 +104,14 @@
                     </td>
                 </tr>
                 {% empty %}
-                <tr>
-                    <td colspan="9" class="text-center py-4 text-muted">No import history found.</td>
+                <tr id="emptyHistoryRow">
+                    <td colspan="9" class="text-center py-5 text-muted">
+                        <div class="py-4">
+                            <i class="bi bi-inbox fs-1 text-secondary opacity-50 d-block mb-2"></i>
+                            <h6 class="fw-semibold text-secondary mb-1" id="emptyHistoryText">No import history available.</h6>
+                            <p class="small text-muted mb-0">Upload a dataset to start importing and tracking history.</p>
+                        </div>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -96,4 +133,149 @@
     </div>
     {% endif %}
 </div>
+
+<!-- ======================================================== -->
+<!-- MODAL: Confirmation Dialog for Clear All Import History   -->
+<!-- ======================================================== -->
+<div class="modal fade" id="clearHistoryModal" tabindex="-1" aria-labelledby="clearHistoryModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-danger text-white">
+                <h6 class="modal-title fw-bold" id="clearHistoryModalLabel">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Clear all import history?
+                </h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" id="clearHistoryCloseX"></button>
+            </div>
+            <form action="{% url 'hub:import_history_clear_all' %}" method="post" id="clearHistoryForm">
+                {% csrf_token %}
+                <div class="modal-body p-4">
+                    <p class="mb-3 fw-medium text-dark" id="clearConfirmationPrompt">
+                        Clear all import history? This will remove the history records.
+                    </p>
+                    <div class="alert alert-danger border-danger-subtle small py-2 px-3 mb-0 d-flex align-items-start gap-2">
+                        <i class="bi bi-shield-fill-x fs-5 text-danger flex-shrink-0"></i>
+                        <div>
+                            <strong>Preserved:</strong> Uploaded source files, cleaned output files, saved mappings, and database records remain safe. Active or queued import jobs will not be interrupted.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light-subtle d-flex justify-content-between">
+                    <button type="button" class="btn btn-secondary btn-sm px-3 fw-semibold" data-bs-dismiss="modal" id="cancelClearHistoryBtn">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn btn-danger btn-sm px-4 fw-semibold" id="confirmClearHistoryBtn">
+                        <i class="bi bi-trash3-fill me-1"></i> Clear All
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const clearForm = document.getElementById('clearHistoryForm');
+    const confirmBtn = document.getElementById('confirmClearHistoryBtn');
+    const cancelBtn = document.getElementById('cancelClearHistoryBtn');
+    const openBtn = document.getElementById('clearAllHistoryBtn');
+    const closeX = document.getElementById('clearHistoryCloseX');
+
+    if (clearForm && confirmBtn) {
+        clearForm.addEventListener('submit', function(e) {
+            // Prevent duplicate clicks & show loading state
+            if (confirmBtn.disabled) {
+                e.preventDefault();
+                return false;
+            }
+            confirmBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+            if (closeX) closeX.disabled = true;
+            if (openBtn) {
+                openBtn.disabled = true;
+                openBtn.classList.add('disabled', 'opacity-50');
+            }
+            confirmBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Clearing...';
+        });
+    }
+
+    // Auto-poll active import progress to update status and progress dynamically
+    const activeProgressApiUrl = "{% url 'hub:import_active_progress_api' %}";
+    let activePollTimer = null;
+    let hadActiveJobs = {{ active_count|default:0 }};
+
+    function pollActiveProgress() {
+        fetch(activeProgressApiUrl, {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            }
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (!data) return;
+            const activeBatches = data.active_batches || {};
+            const activeCount = data.active_count || 0;
+
+            // If active jobs just finished, reload page once to refresh all aggregates and tables
+            if (hadActiveJobs > 0 && activeCount === 0) {
+                hadActiveJobs = 0;
+                setTimeout(() => window.location.reload(), 1000);
+                return;
+            }
+
+            hadActiveJobs = activeCount;
+
+            // Update each visible row matching an active batch
+            Object.keys(activeBatches).forEach(batchId => {
+                const info = activeBatches[batchId];
+                const statusCell = document.getElementById(`status-cell-${batchId}`);
+                const row = document.getElementById(`batch-row-${batchId}`);
+
+                if (statusCell && info) {
+                    const stage = info.stage || 'Processing';
+                    const pct = (info.percentage !== null && info.percentage !== undefined) ? `${Math.round(info.percentage)}%` : '';
+                    let label = pct ? `${stage}: ${pct}` : stage;
+                    if (info.eta_formatted && info.eta_formatted !== '--' && !info.is_completed) {
+                        label += ` (${info.eta_formatted})`;
+                    }
+
+                    if (info.is_completed || info.status === 'COMPLETED') {
+                        statusCell.innerHTML = `<span class="badge bg-success">COMPLETED</span>`;
+                    } else if (info.status === 'PREVIEWED') {
+                        statusCell.innerHTML = `<span class="badge bg-info text-dark">PREVIEW READY</span>`;
+                    } else if (info.is_failed || info.status === 'FAILED') {
+                        statusCell.innerHTML = `<span class="badge bg-danger" title="${info.error_message || ''}">FAILED</span>`;
+                    } else if (info.is_cancelled || info.status === 'CANCELLED') {
+                        statusCell.innerHTML = `<span class="badge bg-secondary">CANCELLED</span>`;
+                    } else {
+                        // In progress / active
+                        statusCell.innerHTML = `
+                            <a href="/import/${batchId}/progress-view/" class="text-decoration-none" title="Live import in progress. Click to view live progress.">
+                                <span class="badge bg-primary d-inline-flex align-items-center gap-1 shadow-xs">
+                                    <span class="spinner-border spinner-border-sm" style="width: 0.7rem; height: 0.7rem;" role="status"></span>
+                                    <span>${label}</span>
+                                </span>
+                            </a>
+                        `;
+                    }
+
+                    if (row && info.total_rows) {
+                        const inputCell = row.querySelector('.input-rows-cell');
+                        if (inputCell && (!inputCell.textContent.trim() || inputCell.textContent.trim() === '0')) {
+                            inputCell.textContent = info.total_rows.toLocaleString();
+                        }
+                    }
+                }
+            });
+        })
+        .catch(err => {
+            console.debug('Active progress poll error:', err);
+        });
+    }
+
+    // Start polling immediately if active jobs or periodically
+    activePollTimer = setInterval(pollActiveProgress, 2500);
+    pollActiveProgress();
+});
+</script>
 {% endblock %}

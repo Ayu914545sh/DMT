@@ -12,6 +12,7 @@ Tests all functional requirements:
 
 import os
 import io
+import csv
 import datetime
 import tempfile
 import openpyxl
@@ -42,7 +43,7 @@ from hub.importers import (
     get_excel_sheets, auto_detect_header_row, read_file_headers
 )
 from hub.services import perform_unified_search
-from hub.exporters import export_mca_dataset, export_gst_dataset
+from hub.exporters import export_mca_dataset, export_gst_dataset, export_cleaned_master_data
 from hub.forms import DatasetUploadForm
 
 
@@ -3525,9 +3526,1290 @@ class ColumnFastSearchTestCase(TestCase):
         self.assertEqual(len(rows), 3)  # 1 header + 2 companies
 
 
+class ImportHistoryClearAllTests(TestCase):
+    """
+    Automated verification of Import History 'Clear All' feature:
+    - Button placement beside Import History heading with matching styling
+    - Exact confirmation dialog: 'Clear all import history? This will remove the history records.'
+    - Inclusion of Cancel and Clear All buttons
+    - Empty state: 'No import history available.'
+    - Disabling Clear All when no eligible records exist or clearing is in progress
+    - Clearing across pagination and filters
+    - Scoping within user's authorized scope (other users' history unaffected)
+    - Retention of active / queued import jobs with clear reporting of retained count
+    - Preservation of files, cleaned outputs, saved mappings, and application data
+    - Atomic persistence after refresh
+    - Failure handling preserving displayed records
+    """
+
+    def setUp(self):
+        from hub.models import MappingTemplate
+        self.MappingTemplate = MappingTemplate
+        self.client = Client()
+        self.admin = User.objects.create_superuser('admin_user', 'admin@example.com', 'AdminPass123!')
+        self.user1 = User.objects.create_user('alice', 'alice@example.com', 'AlicePass123!', is_staff=True, is_superuser=False)
+        self.user2 = User.objects.create_user('bob', 'bob@example.com', 'BobPass123!', is_staff=True, is_superuser=False)
+
+    def test_ui_presence_confirmation_and_styling(self):
+        """Clear All button is beside Import History heading, matches UI, and modal has exact confirmation text."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+        ImportBatch.objects.create(
+            batch_id='BATCH_TEST_001',
+            dataset_type='MCA',
+            file_name='test.xlsx',
+            file_path='/tmp/test.xlsx',
+            file_checksum='abc1',
+            file_format='XLSX',
+            status='COMPLETED',
+            created_by=self.admin
+        )
+
+        res = self.client.get(reverse('hub:import_history'))
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode('utf-8')
+
+        # Heading and button presence
+        self.assertIn('Import History', html)
+        self.assertIn('id="clearAllHistoryBtn"', html)
+        self.assertIn('Clear All', html)
+        self.assertNotIn('disabled aria-disabled="true"', html)
+
+        # Modal and exact confirmation prompt
+        self.assertIn('id="clearHistoryModal"', html)
+        self.assertIn('Clear all import history? This will remove the history records.', html)
+        self.assertIn('id="cancelClearHistoryBtn"', html)
+        self.assertIn('Cancel', html)
+        self.assertIn('id="confirmClearHistoryBtn"', html)
+
+    def test_ui_disabled_and_empty_state_when_no_records(self):
+        """Button is disabled and empty state 'No import history available.' is shown when no records exist."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+        res = self.client.get(reverse('hub:import_history'))
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode('utf-8')
+
+        self.assertIn('No import history available.', html)
+        self.assertIn('disabled', html)
+        self.assertIn('id="clearAllHistoryBtn"', html)
+
+    def test_ui_disabled_when_only_active_jobs_exist(self):
+        """When only active/queued jobs exist, eligible count is 0 so Clear All is disabled."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+        ImportBatch.objects.create(
+            batch_id='BATCH_ACTIVE_001',
+            dataset_type='MCA',
+            file_name='active.xlsx',
+            file_path='/tmp/active.xlsx',
+            file_checksum='act1',
+            file_format='XLSX',
+            status='IMPORTING',
+            created_by=self.admin
+        )
+
+        res = self.client.get(reverse('hub:import_history'))
+        html = res.content.decode('utf-8')
+        # Button should be disabled since eligible_count is 0
+        self.assertIn('disabled', html)
+
+        # Attempting to POST clear-all should retain the active job and report it
+        post_res = self.client.post(reverse('hub:import_history_clear_all'), follow=True)
+        self.assertEqual(post_res.status_code, 200)
+        self.assertTrue(ImportBatch.objects.filter(batch_id='BATCH_ACTIVE_001').exists())
+        messages_text = [m.message for m in post_res.context['messages']]
+        self.assertTrue(any('active or queued' in m for m in messages_text))
+
+    def test_clear_all_across_pagination_and_filters_persists_after_refresh(self):
+        """Clearing clears all eligible records across pagination and filters, persisting on refresh."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+
+        # Create 20 batches across MCA and GST (page size is 15)
+        for i in range(12):
+            ImportBatch.objects.create(
+                batch_id=f'BATCH_MCA_{i:03d}',
+                dataset_type='MCA',
+                file_name=f'mca_{i}.csv',
+                file_path=f'/tmp/mca_{i}.csv',
+                file_checksum=f'cs_mca_{i}',
+                file_format='CSV',
+                status='COMPLETED',
+                created_by=self.admin
+            )
+        for i in range(8):
+            ImportBatch.objects.create(
+                batch_id=f'BATCH_GST_{i:03d}',
+                dataset_type='GST',
+                file_name=f'gst_{i}.csv',
+                file_path=f'/tmp/gst_{i}.csv',
+                file_checksum=f'cs_gst_{i}',
+                file_format='CSV',
+                status='FAILED',
+                created_by=self.admin
+            )
+
+        self.assertEqual(ImportBatch.objects.count(), 20)
+
+        # Clear while filtered or paginated
+        res = self.client.post(reverse('hub:import_history_clear_all'), follow=True)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(ImportBatch.objects.count(), 0)
+
+        # Refresh / subsequent GET
+        refresh_res = self.client.get(reverse('hub:import_history'))
+        self.assertEqual(refresh_res.status_code, 200)
+        self.assertContains(refresh_res, 'No import history available.')
+
+    def test_active_and_queued_jobs_are_retained_and_reported(self):
+        """Active and queued jobs are never deleted or cancelled, and retained count is clearly reported."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+
+        # 2 completed, 1 importing, 1 queued
+        ImportBatch.objects.create(
+            batch_id='BATCH_DONE_1', dataset_type='MCA', file_name='f1.csv',
+            file_path='/tmp/f1.csv', file_checksum='c1', file_format='CSV',
+            status='COMPLETED', created_by=self.admin
+        )
+        ImportBatch.objects.create(
+            batch_id='BATCH_DONE_2', dataset_type='GST', file_name='f2.csv',
+            file_path='/tmp/f2.csv', file_checksum='c2', file_format='CSV',
+            status='FAILED', created_by=self.admin
+        )
+        ImportBatch.objects.create(
+            batch_id='BATCH_RUNNING_1', dataset_type='MCA', file_name='f3.csv',
+            file_path='/tmp/f3.csv', file_checksum='c3', file_format='CSV',
+            status='IMPORTING', created_by=self.admin
+        )
+        ImportBatch.objects.create(
+            batch_id='BATCH_QUEUED_1', dataset_type='GST', file_name='f4.csv',
+            file_path='/tmp/f4.csv', file_checksum='c4', file_format='CSV',
+            status='QUEUED', created_by=self.admin
+        )
+
+        res = self.client.post(reverse('hub:import_history_clear_all'), follow=True)
+        self.assertEqual(res.status_code, 200)
+
+        # Check DB
+        self.assertFalse(ImportBatch.objects.filter(batch_id__in=['BATCH_DONE_1', 'BATCH_DONE_2']).exists())
+        self.assertTrue(ImportBatch.objects.filter(batch_id='BATCH_RUNNING_1').exists())
+        self.assertTrue(ImportBatch.objects.filter(batch_id='BATCH_QUEUED_1').exists())
+
+        # Feedback report
+        messages_text = [m.message for m in res.context['messages']]
+        self.assertTrue(any('cleared 2' in m.lower() and 'retained 2 active' in m.lower() for m in messages_text))
+
+    def test_user_scope_isolation_does_not_affect_other_users(self):
+        """Standard user clearing history does not affect another user's import history."""
+        # Alice's batch
+        b_alice = ImportBatch.objects.create(
+            batch_id='BATCH_ALICE', dataset_type='MCA', file_name='alice.csv',
+            file_path='/tmp/alice.csv', file_checksum='calice', file_format='CSV',
+            status='COMPLETED', created_by=self.user1
+        )
+        # Bob's batch
+        b_bob = ImportBatch.objects.create(
+            batch_id='BATCH_BOB', dataset_type='GST', file_name='bob.csv',
+            file_path='/tmp/bob.csv', file_checksum='cbob', file_format='CSV',
+            status='COMPLETED', created_by=self.user2
+        )
+
+        # Login as Alice and clear
+        self.client.login(username='alice', password='AlicePass123!')
+        res = self.client.post(reverse('hub:import_history_clear_all'), follow=True)
+        self.assertEqual(res.status_code, 200)
+
+        # Alice's batch is cleared
+        self.assertFalse(ImportBatch.objects.filter(batch_id='BATCH_ALICE').exists())
+        # Bob's batch is preserved
+        self.assertTrue(ImportBatch.objects.filter(batch_id='BATCH_BOB').exists())
+
+    def test_preserves_uploaded_files_and_other_application_data(self):
+        """Clearing import history does NOT delete files on disk, mappings, companies, GST, or quality issues."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+
+        # Create temporary source file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
+            tmp.write(b"col1,col2\nval1,val2")
+            tmp_path = tmp.name
+
+        try:
+            batch = ImportBatch.objects.create(
+                batch_id='BATCH_PRESERVE_TEST', dataset_type='MCA', file_name='dummy.csv',
+                file_path=tmp_path, file_checksum='cdum', file_format='CSV',
+                status='COMPLETED', created_by=self.admin
+            )
+            # Create mapping template
+            template = self.MappingTemplate.objects.create(
+                name='MCA Preserve Test Template',
+                dataset_type='MCA',
+                mapping_config={'col1': 'name', 'col2': 'cin'},
+                created_by=self.admin
+            )
+            # Create MCA company
+            company = MCACompany.objects.create(
+                entity_id='U12345DL2020PTC000001',
+                name='Preserved Test Corp',
+                entity_type='company'
+            )
+            # Create GST record
+            gst = GSTRecord.objects.create(
+                gst_number='07AAAAA0000A1Z5',
+                legal_name='Preserved GST Corp',
+                trade_name='Preserved GST',
+                status='ACT'
+            )
+            # Create Quality issue
+            quality = QualityIssue.objects.create(
+                dataset_type='MCA',
+                batch=batch,
+                record_type='COMPANY',
+                entity_identifier='U12345DL2020PTC000001',
+                field_name='phone',
+                raw_value='123',
+                error_code='INVALID_PHONE',
+                reason_description='Preserve test'
+            )
+
+            # Clear import history
+            res = self.client.post(reverse('hub:import_history_clear_all'), follow=True)
+            self.assertEqual(res.status_code, 200)
+
+            # Verify history record removed
+            self.assertFalse(ImportBatch.objects.filter(batch_id='BATCH_PRESERVE_TEST').exists())
+
+            # Verify file on disk still exists
+            self.assertTrue(os.path.exists(tmp_path))
+
+            # Verify other application data intact
+            self.assertTrue(self.MappingTemplate.objects.filter(id=template.id).exists())
+            self.assertTrue(MCACompany.objects.filter(id=company.id).exists())
+            self.assertTrue(GSTRecord.objects.filter(id=gst.id).exists())
+            self.assertTrue(QualityIssue.objects.filter(id=quality.id).exists())
+
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def test_failure_preserves_records_and_reports_error(self):
+        """When an unexpected error occurs during clear-all, records are preserved and error is reported."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+        ImportBatch.objects.create(
+            batch_id='BATCH_FAIL_TEST', dataset_type='MCA', file_name='fail.csv',
+            file_path='/tmp/fail.csv', file_checksum='cfail', file_format='CSV',
+            status='COMPLETED', created_by=self.admin
+        )
+
+        from django.db.models.query import QuerySet
+        with patch.object(QuerySet, 'delete', side_effect=RuntimeError("Simulated Failure")):
+            res = self.client.post(reverse('hub:import_history_clear_all'), follow=True)
+            self.assertEqual(res.status_code, 200)
+
+        # Batch preserved
+        self.assertTrue(ImportBatch.objects.filter(batch_id='BATCH_FAIL_TEST').exists())
+
+    def test_get_method_rejected(self):
+        """Clear All only accepts POST requests."""
+        self.client.login(username='admin_user', password='AdminPass123!')
+        res = self.client.get(reverse('hub:import_history_clear_all'), follow=True)
+        self.assertEqual(res.status_code, 200)
+        messages_text = [m.message for m in res.context['messages']]
+        self.assertTrue(any('Invalid request method' in m for m in messages_text))
+
+
+class ImportLiveProgressTrackingTests(TestCase):
+    """
+    Test suite for live progress tracking during upload, validation, and cleaning:
+    - Clear processing stages (Uploading, Reading headers, Waiting for mapping, Queued, Validating and cleaning, Preparing output, Completed/Failed/Cancelled)
+    - Real metrics (bytes, rows, validation failures, elapsed time, real ETA)
+    - Bounded-memory file counting
+    - Multi-job isolation and concurrency
+    - Refresh persistence from persistent storage
+    - Safety of active jobs during history clearing
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='progresstester', password='TestPassword123!')
+        self.admin = User.objects.create_superuser(username='progressadmin', password='AdminPassword123!')
+        self.client = Client()
+
+    def test_bounded_row_counting_csv(self):
+        """Bounded line counting counts rows correctly without reading full file into memory."""
+        from hub.progress import count_file_rows_bounded
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv') as f:
+            f.write("CIN,Name,ROC\n")
+            for i in range(150):
+                f.write(f"U12345DL2020PTC{i:06d},Company {i},ROC Delhi\n")
+            f_path = f.name
+
+        try:
+            count = count_file_rows_bounded(f_path, file_format='CSV', header_row=0)
+            self.assertEqual(count, 150)
+        finally:
+            if os.path.exists(f_path):
+                os.remove(f_path)
+
+    def test_bounded_row_counting_missing_file(self):
+        """Returns None safely for non-existent file path."""
+        from hub.progress import count_file_rows_bounded
+        self.assertIsNone(count_file_rows_bounded('/non/existent/path.csv'))
+
+    def test_progress_stages_and_real_percentages(self):
+        """Tracks exact stages and calculates percentage strictly from real row counts."""
+        from hub.progress import init_progress, update_progress, get_progress
+
+        batch_id = 'BATCH-TEST-STAGE-01'
+        # Stage 1: Queued
+        init_progress(batch_id=batch_id, dataset_type='MCA', stage='Queued for processing', total_rows=500)
+        p = get_progress(batch_id)
+        self.assertEqual(p['stage'], 'Queued for processing')
+        self.assertEqual(p['total_rows'], 500)
+        self.assertEqual(p['processed_rows'], 0)
+        self.assertEqual(p['percentage'], 0.0)
+
+        # Stage 2: Validating and cleaning with partial progress
+        update_progress(
+            batch_id=batch_id,
+            stage='Validating and cleaning',
+            status='PROCESSING',
+            processed_rows=325,
+            total_rows=500,
+            validation_failures=12
+        )
+        p = get_progress(batch_id)
+        self.assertEqual(p['stage'], 'Validating and cleaning')
+        self.assertEqual(p['processed_rows'], 325)
+        self.assertEqual(p['percentage'], 65.0)
+        self.assertEqual(p['validation_failures'], 12)
+        self.assertIn("65%", p['message'])
+        self.assertIn("325 of 500 rows processed", p['message'])
+
+        # Total rows unknown: percentage must be None (no fake fabricated percentage)
+        batch_id_unknown = 'BATCH-TEST-UNKNOWN'
+        init_progress(batch_id=batch_id_unknown, dataset_type='GST', stage='Validating and cleaning', total_rows=None)
+        update_progress(batch_id=batch_id_unknown, processed_rows=42)
+        p_unk = get_progress(batch_id_unknown)
+        self.assertIsNone(p_unk['percentage'])
+        self.assertEqual(p_unk['processed_rows'], 42)
+        self.assertIn("42 rows processed", p_unk['message'])
+
+    def test_duration_and_eta_calculation(self):
+        """ETA is calculated only when sufficient rows processed and time elapsed."""
+        import time
+        from hub.progress import init_progress, update_progress, get_progress, _PROGRESS_REGISTRY, _PROGRESS_LOCK
+
+        batch_id = 'BATCH-ETA-TEST'
+        init_progress(batch_id=batch_id, total_rows=1000)
+        # Mock start time to 10 seconds ago
+        with _PROGRESS_LOCK:
+            _PROGRESS_REGISTRY[batch_id]['start_time'] = time.time() - 10.0
+
+        update_progress(batch_id=batch_id, processed_rows=200, total_rows=1000)
+        p = get_progress(batch_id)
+        self.assertIsNotNone(p['eta_seconds'])
+        self.assertTrue(len(p['eta_formatted']) > 0)
+        self.assertTrue(p['elapsed_seconds'] >= 9.9)
+
+    def test_progress_persistence_and_refresh_restoration(self):
+        """When in-memory registry is cleared (simulating refresh/restart), state is restored from DB."""
+        from hub.progress import init_progress, update_progress, get_progress, _PROGRESS_REGISTRY, _PROGRESS_LOCK
+
+        batch = ImportBatch.objects.create(
+            batch_id='BATCH-REFRESH-TEST',
+            dataset_type='MCA',
+            file_name='test.csv',
+            file_path='/tmp/test.csv',
+            file_checksum='c1234567',
+            file_format='CSV',
+            status='PROCESSING',
+            total_input_rows=1000,
+            created_by=self.user
+        )
+
+        init_progress(batch_id=batch.batch_id, dataset_type='MCA', stage='Validating and cleaning', total_rows=1000)
+        update_progress(
+            batch_id=batch.batch_id,
+            stage='Validating and cleaning',
+            status='PROCESSING',
+            processed_rows=450,
+            total_rows=1000,
+            validation_failures=18,
+            force_db_save=True
+        )
+
+        # Clear in-memory cache to simulate page refresh / new worker
+        with _PROGRESS_LOCK:
+            _PROGRESS_REGISTRY.pop(batch.batch_id, None)
+
+        # get_progress must reconstruct from DB snapshot
+        restored = get_progress(batch.batch_id)
+        self.assertEqual(restored['batch_id'], batch.batch_id)
+        self.assertEqual(restored['stage'], 'Validating and cleaning')
+        self.assertEqual(restored['processed_rows'], 450)
+        self.assertEqual(restored['total_rows'], 1000)
+        self.assertEqual(restored['percentage'], 45.0)
+        self.assertEqual(restored['validation_failures'], 18)
+
+    def test_concurrent_import_jobs_isolation(self):
+        """Multiple imports running at the same time have separate, isolated progress states."""
+        from hub.progress import init_progress, update_progress, get_progress
+
+        batch1 = 'BATCH-CONCURRENT-01'
+        batch2 = 'BATCH-CONCURRENT-02'
+
+        init_progress(batch_id=batch1, dataset_type='MCA', stage='Validating and cleaning', total_rows=500)
+        init_progress(batch_id=batch2, dataset_type='GST', stage='Validating and cleaning', total_rows=800)
+
+        update_progress(batch1, processed_rows=100, validation_failures=2)
+        update_progress(batch2, processed_rows=400, validation_failures=15)
+
+        p1 = get_progress(batch1)
+        p2 = get_progress(batch2)
+
+        self.assertEqual(p1['processed_rows'], 100)
+        self.assertEqual(p1['percentage'], 20.0)
+        self.assertEqual(p1['validation_failures'], 2)
+
+        self.assertEqual(p2['processed_rows'], 400)
+        self.assertEqual(p2['percentage'], 50.0)
+        self.assertEqual(p2['validation_failures'], 15)
+
+    def test_progress_cancellation(self):
+        """Cancelling a job marks status as CANCELLED and flags cancel token."""
+        from hub.progress import init_progress, request_cancel, is_cancelled, get_progress
+
+        batch = ImportBatch.objects.create(
+            batch_id='BATCH-CANCEL-TEST',
+            dataset_type='GST',
+            file_name='gst.csv',
+            file_path='/tmp/gst.csv',
+            file_checksum='c999',
+            file_format='CSV',
+            status='PROCESSING',
+            created_by=self.user
+        )
+
+        init_progress(batch_id=batch.batch_id, stage='Validating and cleaning')
+        self.assertFalse(is_cancelled(batch.batch_id))
+
+        request_cancel(batch.batch_id)
+        self.assertTrue(is_cancelled(batch.batch_id))
+
+        p = get_progress(batch.batch_id)
+        self.assertTrue(p['is_cancelled'])
+        self.assertEqual(p['status'], 'CANCELLED')
+
+    def test_active_progress_api_view_and_clear_history_safety(self):
+        """Active jobs are reported in active-progress API and never deleted by history clear-all."""
+        from hub.progress import init_progress
+
+        active_batch = ImportBatch.objects.create(
+            batch_id='BATCH-ACTIVE-STAY',
+            dataset_type='MCA',
+            file_name='active.csv',
+            file_path='/tmp/active.csv',
+            file_checksum='cact',
+            file_format='CSV',
+            status='PROCESSING',
+            created_by=self.admin
+        )
+        completed_batch = ImportBatch.objects.create(
+            batch_id='BATCH-COMPLETED-GONE',
+            dataset_type='MCA',
+            file_name='done.csv',
+            file_path='/tmp/done.csv',
+            file_checksum='cdone',
+            file_format='CSV',
+            status='COMPLETED',
+            created_by=self.admin
+        )
+
+        init_progress(batch_id=active_batch.batch_id, dataset_type='MCA', stage='Validating and cleaning', total_rows=100)
+
+        self.client.login(username='progressadmin', password='AdminPassword123!')
+
+        # Active progress API returns active batch
+        res = self.client.get(reverse('hub:import_active_progress_api'))
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn('active_batches', data)
+        self.assertIn(active_batch.batch_id, data['active_batches'])
+
+        # Clear history must preserve active batch
+        res_clear = self.client.post(reverse('hub:import_history_clear_all'))
+        self.assertEqual(res_clear.status_code, 302)
+
+        self.assertTrue(ImportBatch.objects.filter(batch_id=active_batch.batch_id).exists())
+        self.assertFalse(ImportBatch.objects.filter(batch_id=completed_batch.batch_id).exists())
+
+
+class ColumnSelectionAndExclusionTestCase(TestCase):
+    """
+    Tests for column-selection checkboxes in MCA/GST mapping:
+    - Include checkboxes and Select All / Clear Selection controls.
+    - Omission of excluded columns from parsing, cleaning, validation, staging, DB writes, and exports.
+    - Required field retention and dependency validation.
+    - Safe database updates preserving omitted fields.
+    - Export column customization.
+    """
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_superuser('coladmin', 'col@example.com', 'AdminPassword123!')
+        self.client.login(username='coladmin', password='AdminPassword123!')
+        self.temp_files = []
+
+    def tearDown(self):
+        for f in self.temp_files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+
+    def test_mapping_view_renders_column_items_and_selection_defaults(self):
+        """Mapping view renders column items, defaults mapped targets to checked, and skip to unchecked."""
+        csv_file = tempfile.NamedTemporaryFile(suffix=".csv", mode='w', newline='', encoding='utf-8', delete=False)
+        writer = csv.writer(csv_file)
+        writer.writerow(["Sr. No.", "CIN", "Company Name", "Extra Remarks"])
+        writer.writerow(["1", "U12345MH2020PTC123456", "ALPHA TECH PVT LTD", "Some comment"])
+        csv_file.close()
+        self.temp_files.append(csv_file.name)
+
+        batch = ImportBatch.objects.create(
+            batch_id="TEST-COL-MAP-01",
+            dataset_type="MCA",
+            file_name="test_col_map.csv",
+            file_path=csv_file.name,
+            file_checksum="chk_col_map_01",
+            file_format="CSV",
+            status="UPLOADED",
+            created_by=self.user,
+            mapping_config={'delimiter': ',', 'encoding': 'utf-8'}
+        )
+
+        res = self.client.get(reverse('hub:import_map', args=[batch.batch_id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('column_items', res.context)
+        col_items = res.context['column_items']
+
+        # Check items: CIN is required and selected; Sr. No. is skip and initially unselected
+        item_by_header = {c['header']: c for c in col_items}
+        self.assertIn('CIN', item_by_header)
+        self.assertTrue(item_by_header['CIN']['is_required'])
+        self.assertTrue(item_by_header['CIN']['is_selected'])
+
+        self.assertIn('Sr. No.', item_by_header)
+        self.assertTrue(item_by_header['Sr. No.']['is_skip'])
+        self.assertFalse(item_by_header['Sr. No.']['is_selected'])
+
+        content = res.content.decode('utf-8')
+        self.assertIn("Include", content)
+        self.assertIn("Select All", content)
+        self.assertIn("Clear Selection", content)
+        self.assertIn("columns selected", content)
+        self.assertIn("col_0", content)
+
+    def test_post_mapping_persists_selected_and_excluded_columns(self):
+        """Submitting mapping saves selected_columns and excluded_columns in mapping_config."""
+        csv_file = tempfile.NamedTemporaryFile(suffix=".csv", mode='w', newline='', encoding='utf-8', delete=False)
+        writer = csv.writer(csv_file)
+        writer.writerow(["CIN", "Company Name", "State", "City"])
+        writer.writerow(["U12345MH2020PTC123456", "ALPHA TECH PVT LTD", "Maharashtra", "Mumbai"])
+        csv_file.close()
+        self.temp_files.append(csv_file.name)
+
+        batch = ImportBatch.objects.create(
+            batch_id="TEST-COL-MAP-02",
+            dataset_type="MCA",
+            file_name="test_col_map2.csv",
+            file_path=csv_file.name,
+            file_checksum="chk_col_map_02",
+            file_format="CSV",
+            status="UPLOADED",
+            created_by=self.user,
+            mapping_config={'delimiter': ',', 'encoding': 'utf-8'}
+        )
+
+        # Submit only CIN and Company Name; State and City are excluded
+        post_data = {
+            'selected_columns': ['CIN', 'Company Name'],
+            'map_CIN': 'entityId',
+            'map_Company Name': 'name',
+            'map_State': 'state',
+            'map_City': 'city',
+            'date_format': '%m/%d/%Y'
+        }
+        res = self.client.post(reverse('hub:import_map', args=[batch.batch_id]), post_data, follow=True)
+        self.assertEqual(res.status_code, 200)
+
+        batch.refresh_from_db()
+        self.assertEqual(batch.mapping_config.get('selected_columns'), ['CIN', 'Company Name'])
+        self.assertEqual(batch.mapping_config.get('excluded_columns'), ['State', 'City'])
+
+    def test_pipeline_completely_excludes_unchecked_columns(self):
+        """Unchecked columns are not cleaned, validated, in extra_data, or in StagedRow raw_data."""
+        csv_file = tempfile.NamedTemporaryFile(suffix=".csv", mode='w', newline='', encoding='utf-8', delete=False)
+        writer = csv.writer(csv_file)
+        # Note: Mobile column has an invalid phone number.
+        writer.writerow(["CIN", "Company Name", "Director Mobile", "Secret Notes"])
+        writer.writerow(["U12345MH2020PTC123456", "BETA SYSTEMS PVT LTD", "INVALID-PHONE-999", "Sensitive Info"])
+        csv_file.close()
+        self.temp_files.append(csv_file.name)
+
+        # Batch where Director Mobile and Secret Notes are NOT selected
+        batch = ImportBatch.objects.create(
+            batch_id="TEST-COL-PIPE-01",
+            dataset_type="MCA",
+            file_name="test_pipe.csv",
+            file_path=csv_file.name,
+            file_checksum="chk_col_pipe_01",
+            file_format="CSV",
+            status="UPLOADED",
+            created_by=self.user,
+            mapping_config={
+                'delimiter': ',',
+                'encoding': 'utf-8',
+                'columns': {
+                    'CIN': 'entityId',
+                    'Company Name': 'name',
+                    'Director Mobile': 'directorMobile',
+                    'Secret Notes': ''
+                },
+                'selected_columns': ['CIN', 'Company Name'],
+                'excluded_columns': ['Director Mobile', 'Secret Notes'],
+                'date_format': '%m/%d/%Y'
+            }
+        )
+
+        stage_res = stage_and_validate_batch(batch)
+        self.assertEqual(stage_res['total_rows'], 1)
+
+        staged = StagedRow.objects.get(batch=batch, row_number=1)
+        # Excluded columns must not be in raw_data, cleaned_data, or extra_data
+        self.assertIn('CIN', staged.raw_data)
+        self.assertIn('Company Name', staged.raw_data)
+        self.assertNotIn('Director Mobile', staged.raw_data)
+        self.assertNotIn('Secret Notes', staged.raw_data)
+
+        self.assertNotIn('Secret Notes', staged.cleaned_data.get('extra_data', {}))
+        self.assertNotIn('directorMobile', staged.cleaned_data)
+        self.assertEqual(staged.canonical_mobile, '')
+
+        # No QualityIssue logged because Director Mobile was excluded!
+        self.assertEqual(QualityIssue.objects.filter(batch=batch).count(), 0)
+
+        # Publish to database
+        execute_import_publication(batch, user=self.user)
+        company = MCACompany.objects.get(entity_id="U12345MH2020PTC123456")
+        self.assertEqual(company.name, "BETA SYSTEMS PVT LTD")
+        # No director entry created
+        self.assertEqual(MCADirectorEntry.objects.filter(company=company).count(), 0)
+        # Extra data does not contain excluded column
+        self.assertNotIn('Secret Notes', company.extra_data)
+
+    def test_safe_database_update_preserves_omitted_fields(self):
+        """Updating existing record when fields are omitted leaves existing DB values untouched."""
+        existing = MCACompany.objects.create(
+            entity_type='company',
+            entity_id='U99999MH2021PTC999999',
+            name='EXISTING OLD NAME',
+            state='Maharashtra',
+            city='Pune',
+            paid_up_capital=750000.00
+        )
+
+        csv_file = tempfile.NamedTemporaryFile(suffix=".csv", mode='w', newline='', encoding='utf-8', delete=False)
+        writer = csv.writer(csv_file)
+        # Import file only contains CIN and updated Name
+        writer.writerow(["CIN", "Company Name"])
+        writer.writerow(["U99999MH2021PTC999999", "NEW UPDATED NAME PVT LTD"])
+        csv_file.close()
+        self.temp_files.append(csv_file.name)
+
+        batch = ImportBatch.objects.create(
+            batch_id="TEST-SAFE-UPDATE",
+            dataset_type="MCA",
+            file_name="safe_update.csv",
+            file_path=csv_file.name,
+            file_checksum="chk_safe_update",
+            file_format="CSV",
+            status="UPLOADED",
+            created_by=self.user,
+            mapping_config={
+                'columns': {'CIN': 'entityId', 'Company Name': 'name'},
+                'selected_columns': ['CIN', 'Company Name'],
+                'date_format': '%m/%d/%Y'
+            }
+        )
+
+        stage_and_validate_batch(batch)
+        execute_import_publication(batch, user=self.user)
+
+        existing.refresh_from_db()
+        # Name was updated
+        self.assertEqual(existing.name, "NEW UPDATED NAME PVT LTD")
+        # Omitted fields remain completely preserved!
+        self.assertEqual(existing.state, "Maharashtra")
+        self.assertEqual(existing.city, "Pune")
+        self.assertEqual(float(existing.paid_up_capital), 750000.00)
+
+    def test_export_selection_omits_excluded_fields(self):
+        """Exports omit columns that were excluded from import and support custom column selection."""
+        csv_file = tempfile.NamedTemporaryFile(suffix=".csv", mode='w', newline='', encoding='utf-8', delete=False)
+        writer = csv.writer(csv_file)
+        writer.writerow(["CIN", "Company Name", "State"])
+        writer.writerow(["U88888MH2022PTC888888", "DELTA TECH CORP", "Karnataka"])
+        csv_file.close()
+        self.temp_files.append(csv_file.name)
+
+        # Batch where State was excluded
+        batch = ImportBatch.objects.create(
+            batch_id="TEST-EXP-OMIT",
+            dataset_type="MCA",
+            file_name="exp_omit.csv",
+            file_path=csv_file.name,
+            file_checksum="chk_exp_omit",
+            file_format="CSV",
+            status="UPLOADED",
+            created_by=self.user,
+            mapping_config={
+                'columns': {'CIN': 'entityId', 'Company Name': 'name', 'State': 'state'},
+                'selected_columns': ['CIN', 'Company Name'],
+                'excluded_columns': ['State'],
+                'date_format': '%m/%d/%Y'
+            }
+        )
+
+        stage_and_validate_batch(batch)
+        export_path = export_cleaned_master_data(batch, file_format='CSV')
+        self.temp_files.append(export_path)
+
+        with open(export_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header_row = next(reader)
+            # Entity ID and Company Name are present
+            self.assertIn("Entity ID", header_row)
+            self.assertIn("Company Name", header_row)
+            # Excluded 'State' is NOT in export headers!
+            self.assertNotIn("State", header_row)
+
+        # Custom export selection test
+        custom_export_path = export_cleaned_master_data(batch, file_format='CSV', columns=['Entity ID'])
+        self.temp_files.append(custom_export_path)
+        with open(custom_export_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            custom_headers = next(reader)
+            self.assertEqual(custom_headers, ["Entity ID"])
+class ImportPreviewRegressionTestCase(TestCase):
+    """
+    Regression test suite for Django import-preview rendering and optional columns support.
+    Verifies:
+    1. Neither directorEmail nor email present (exact bug condition from screenshot).
+    2. Only directorEmail present.
+    3. Only email present (labeled as company/general email).
+    4. Both present (both rendered, company labeled).
+    5. Empty-string and None values for contact fields.
+    6. Company-only MCA data with no director fields.
+    7. GST data with optional contact fields excluded.
+    8. Fully mapped record.
+    9. Other missing optional fields (canonical_mobile, phone_validity, etc.).
+    10. Excluded fields are not reintroduced into publishing payloads and existing DB values preserved.
+    """
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_superuser('prevadmin', 'prev@example.com', 'AdminPass123!')
+        self.client.login(username='prevadmin', password='AdminPass123!')
+
+    def _create_mca_batch(self, batch_id='BATCH-REG-MCA-01'):
+        return ImportBatch.objects.create(
+            batch_id=batch_id,
+            dataset_type='MCA',
+            file_name='test_mca.xlsx',
+            file_path='/tmp/test_mca.xlsx',
+            file_checksum='chk_mca_reg_01',
+            file_format='XLSX',
+            status='STAGED',
+            created_by=self.user,
+            total_input_rows=1,
+            proposed_new_records=1,
+            mapping_config={'selected_columns': ['Entity ID', 'Company Name'], 'columns': {'CIN': 'entityId', 'Company': 'name'}}
+        )
+
+    def _create_gst_batch(self, batch_id='BATCH-REG-GST-01'):
+        return ImportBatch.objects.create(
+            batch_id=batch_id,
+            dataset_type='GST',
+            file_name='test_gst.xlsx',
+            file_path='/tmp/test_gst.xlsx',
+            file_checksum='chk_gst_reg_01',
+            file_format='XLSX',
+            status='STAGED',
+            created_by=self.user,
+            total_input_rows=1,
+            proposed_new_records=1,
+            mapping_config={'selected_columns': ['GSTIN', 'Trade Name'], 'columns': {'GSTIN': 'gst_number', 'Trade': 'trade_name'}}
+        )
+
+    def test_neither_director_email_nor_company_email_renders_200(self):
+        """Case 1: Neither directorEmail nor email key present in cleaned_data (screenshot condition)."""
+        batch = self._create_mca_batch('BATCH-REG-NO-EMAIL')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U46620DL2025PTC440609',
+            cleaned_data={
+                'name': 'YOGSHA TRADEX (I) PRIVATE LIMITED',
+                'entityId': 'U46620DL2025PTC440609',
+                'entityType': 'company',
+                'extra_data': {},
+                'source_row': 1,
+                'source_file': 'Data1.xlsx',
+                'company_name': 'YOGSHA TRADEX (I) PRIVATE LIMITED',
+                'source_sheet': 'Sheet1'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'YOGSHA TRADEX (I) PRIVATE LIMITED')
+        self.assertContains(res, 'U46620DL2025PTC440609')
+        # Director name displays '-'
+        self.assertContains(res, '<div>-</div>')
+
+    def test_only_director_email_present(self):
+        """Case 2: Only directorEmail present; should render director email without company label."""
+        batch = self._create_mca_batch('BATCH-REG-DIR-EMAIL')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U12345MH2020PTC123456',
+            cleaned_data={
+                'name': 'ALPHA SOLUTIONS PVT LTD',
+                'entityId': 'U12345MH2020PTC123456',
+                'entityType': 'company',
+                'directorName': 'Jane Director',
+                'directorEmail': 'jane.director@alpha.com'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'Jane Director')
+        self.assertContains(res, 'jane.director@alpha.com')
+        # Does NOT label director email as (Company)
+        self.assertNotContains(res, '(Company)')
+
+    def test_only_company_email_present_labeled_as_company(self):
+        """Case 3: Only company email present; should render labeled as (Company) email."""
+        batch = self._create_mca_batch('BATCH-REG-COMP-EMAIL')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U12345MH2020PTC123456',
+            cleaned_data={
+                'name': 'BETA ENTERPRISES PVT LTD',
+                'entityId': 'U12345MH2020PTC123456',
+                'entityType': 'company',
+                'email': 'info@betaenterprises.com'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'info@betaenterprises.com')
+        self.assertContains(res, '(Company)')
+
+    def test_both_emails_present_distinguished(self):
+        """Case 4: Both directorEmail and company email present; both rendered and distinguished."""
+        batch = self._create_mca_batch('BATCH-REG-BOTH-EMAILS')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U12345MH2020PTC123456',
+            cleaned_data={
+                'name': 'GAMMA SERVICES PVT LTD',
+                'entityId': 'U12345MH2020PTC123456',
+                'entityType': 'company',
+                'directorName': 'Bob Gamma',
+                'directorEmail': 'bob@gammaservices.com',
+                'email': 'contact@gammaservices.com'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'bob@gammaservices.com')
+        self.assertContains(res, 'contact@gammaservices.com')
+        self.assertContains(res, '(Company)')
+
+    def test_empty_string_and_none_values_do_not_crash(self):
+        """Case 5: Empty-string and None values for emails and phone fields."""
+        batch = self._create_mca_batch('BATCH-REG-NONE-EMPTY')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U12345MH2020PTC123456',
+            cleaned_data={
+                'name': 'DELTA LOGISTICS PVT LTD',
+                'entityId': 'U12345MH2020PTC123456',
+                'entityType': 'company',
+                'directorName': None,
+                'directorEmail': '',
+                'email': None,
+                'original_phone': '',
+                'directorMobile': None,
+                'cleaned_phone': None,
+                'canonical_mobile': '',
+                'phone_status': None,
+                'phone_validity': ''
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'DELTA LOGISTICS PVT LTD')
+        self.assertContains(res, 'null / blank')
+        self.assertContains(res, 'MISSING')
+
+    def test_company_only_mca_no_director_fields(self):
+        """Case 6: Company-only MCA data with no director fields."""
+        batch = self._create_mca_batch('BATCH-REG-COMP-ONLY')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U99999DL2024PTC111111',
+            cleaned_data={
+                'name': 'SOLO HOLDINGS PVT LTD',
+                'entityId': 'U99999DL2024PTC111111',
+                'entityType': 'company',
+                'state': 'Delhi',
+                'city': 'New Delhi'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'SOLO HOLDINGS PVT LTD')
+        self.assertContains(res, '<div>-</div>')
+
+    def test_gst_data_with_optional_contact_fields_excluded(self):
+        """Case 7: GST data with optional contact fields (phone, email, PAN) excluded."""
+        batch = self._create_gst_batch('BATCH-REG-GST-OPT-EXCL')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='07AAAAA0000A1Z5',
+            cleaned_data={
+                'gst_number': '07AAAAA0000A1Z5',
+                'trade_name': 'KAPOOR TRADERS',
+                'legal_name': 'KAPOOR TRADING CORP'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'KAPOOR TRADERS')
+        self.assertContains(res, '07AAAAA0000A1Z5')
+        self.assertContains(res, 'null / blank')
+        self.assertContains(res, 'MISSING')
+
+    def test_fully_mapped_record_displays_properly(self):
+        """Case 8: Fully mapped MCA record with phone, director, company email, and DIN."""
+        batch = self._create_mca_batch('BATCH-REG-FULLY-MAPPED')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U12345DL2022PTC123456',
+            canonical_mobile='9876543210',
+            cleaned_data={
+                'name': 'ZENITH INFOTECH PVT LTD',
+                'entityId': 'U12345DL2022PTC123456',
+                'entityType': 'company',
+                'directorName': 'Alice Smith',
+                'directorEmail': 'alice@zenith.com',
+                'email': 'hq@zenith.com',
+                'original_phone': '+91 98765 43210',
+                'canonical_mobile': '9876543210',
+                'cleaned_phone': '9876543210',
+                'phone_status': 'valid',
+                'phone_validity': 'valid'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_preview', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'ZENITH INFOTECH PVT LTD')
+        self.assertContains(res, 'Alice Smith')
+        self.assertContains(res, 'alice@zenith.com')
+        self.assertContains(res, 'hq@zenith.com')
+        self.assertContains(res, '+91 98765 43210')
+        self.assertContains(res, 'VALID (10 DIGIT)')
+
+    def test_missing_phone_validity_and_canonical_mobile_in_batch_detail(self):
+        """Case 9: Batch detail page also renders cleanly without canonical_mobile or phone_validity."""
+        batch = self._create_mca_batch('BATCH-REG-DETAIL-SAFE')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U11111DL2025PTC111111',
+            cleaned_data={
+                'name': 'MINIMAL ENTITY PVT LTD',
+                'entityId': 'U11111DL2025PTC111111',
+                'entityType': 'company'
+            },
+            proposed_action='CREATE',
+            validation_status='VALID'
+        )
+        url = reverse('hub:import_batch_detail', args=[batch.batch_id])
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'MINIMAL ENTITY PVT LTD')
+        self.assertContains(res, 'MISSING')
+
+    def test_excluded_fields_not_reintroduced_in_publishing_payload(self):
+        """Case 10: Omitted fields do not overwrite existing DB values upon publication."""
+        MCACompany.objects.create(
+            entity_id='U77777MH2021PTC777777',
+            name='ORIGINAL NAME PVT LTD',
+            state='Maharashtra',
+            city='Mumbai',
+            email='existing_company@original.com'
+        )
+        batch = self._create_mca_batch('BATCH-REG-PUB-PRESERVE')
+        StagedRow.objects.create(
+            batch=batch,
+            row_number=1,
+            entity_identifier='U77777MH2021PTC777777',
+            cleaned_data={
+                'name': 'UPDATED NAME PVT LTD',
+                'entityId': 'U77777MH2021PTC777777',
+                'entityType': 'company'
+            },
+            proposed_action='UPDATE',
+            validation_status='VALID'
+        )
+        execute_import_publication(batch)
+        company = MCACompany.objects.get(entity_id='U77777MH2021PTC777777')
+        self.assertEqual(company.name, 'UPDATED NAME PVT LTD')
+        self.assertEqual(company.state, 'Maharashtra')
+        self.assertEqual(company.city, 'Mumbai')
+        self.assertEqual(company.email, 'existing_company@original.com')
 
 
 
+class LiveProgressWorkflowTestCase(TestCase):
+    """
+    Regression test suite for live progress tracking, elapsed time,
+    smoothed ETA calculation, database publish stats, and recovery.
+    """
 
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='progresstester',
+            email='progress@example.com',
+            password='testpassword123'
+        )
+        self.other_user = User.objects.create_user(
+            username='otherprogressuser',
+            email='other@example.com',
+            password='testpassword123'
+        )
+        self.batch = ImportBatch.objects.create(
+            batch_id='BATCH-PROGRESS-TEST-001',
+            dataset_type='MCA',
+            file_name='progress_test.xlsx',
+            file_path='imports/progress_test.xlsx',
+            file_checksum='1234567890abcdef',
+            file_format='XLSX',
+            status='PROCESSING',
+            created_by=self.user,
+            total_input_rows=1000
+        )
 
+    def test_init_progress_and_get_progress(self):
+        from hub.progress import init_progress, get_progress
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type='MCA',
+            stage='Validating and cleaning',
+            total_rows=1000,
+            unit='rows',
+            step=3
+        )
+        prog = get_progress(self.batch.batch_id)
+        self.assertEqual(prog['batch_id'], self.batch.batch_id)
+        self.assertEqual(prog['stage'], 'Validating and cleaning')
+        self.assertEqual(prog['total_rows'], 1000)
+        self.assertEqual(prog['processed_rows'], 0)
+        self.assertEqual(prog['percentage'], 0.0)
+        self.assertEqual(prog['unit'], 'rows')
+        self.assertEqual(prog['step'], 3)
+        self.assertEqual(prog['status'], 'PROCESSING')
+        self.assertFalse(prog['is_completed'])
+        self.assertFalse(prog['is_failed'])
 
+    def test_smoothed_throughput_and_eta_calculation(self):
+        from hub.progress import init_progress, update_progress, get_progress
+        import time
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type='MCA',
+            stage='Validating and cleaning',
+            total_rows=10000
+        )
+        # First update
+        update_progress(
+            batch_id=self.batch.batch_id,
+            processed_rows=2000,
+            total_rows=10000,
+            stage='Validating and cleaning'
+        )
+        # Advance slightly and second update to form speed
+        time.sleep(0.05)
+        update_progress(
+            batch_id=self.batch.batch_id,
+            processed_rows=5000,
+            total_rows=10000,
+            stage='Validating and cleaning'
+        )
+        prog = get_progress(self.batch.batch_id)
+        self.assertEqual(prog['processed_rows'], 5000)
+        self.assertEqual(prog['percentage'], 50.0)
+        self.assertIn('rows/sec', prog['speed_formatted'])
+        self.assertTrue('approx.' in prog['eta_formatted'] or 'approximately' in prog['eta_formatted'] or 'Calculating' in prog['eta_formatted'])
+
+    def test_monotonic_progress_enforcement(self):
+        from hub.progress import init_progress, update_progress, get_progress
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type='MCA',
+            stage='Validating',
+            total_rows=1000
+        )
+        update_progress(self.batch.batch_id, processed_rows=500, total_rows=1000)
+        # Attempt to regress processed_rows
+        update_progress(self.batch.batch_id, processed_rows=300, total_rows=1000)
+        prog = get_progress(self.batch.batch_id)
+        self.assertEqual(prog['processed_rows'], 500)
+        self.assertEqual(prog['percentage'], 50.0)
+
+    def test_indeterminate_progress_when_total_unknown(self):
+        from hub.progress import init_progress, update_progress, get_progress
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type='MCA',
+            stage='Scanning stream',
+            total_rows=None
+        )
+        update_progress(self.batch.batch_id, processed_rows=250, total_rows=None)
+        prog = get_progress(self.batch.batch_id)
+        self.assertIsNone(prog['total_rows'])
+        self.assertIsNone(prog['percentage'])
+        self.assertEqual(prog['processed_rows'], 250)
+
+    def test_db_stats_tracking_in_publication_step(self):
+        from hub.progress import init_progress, update_progress, get_progress
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type='MCA',
+            stage='Committed batch 1 of 5',
+            step=4,
+            unit='source rows'
+        )
+        db_stats = {
+            'companies_created': 120,
+            'companies_updated': 30,
+            'directors_created': 210,
+            'issues_created': 4
+        }
+        update_progress(
+            batch_id=self.batch.batch_id,
+            processed_rows=150,
+            total_rows=1000,
+            step=4,
+            db_stats=db_stats
+        )
+        prog = get_progress(self.batch.batch_id)
+        self.assertEqual(prog['step'], 4)
+        self.assertEqual(prog['db_stats']['companies_created'], 120)
+        self.assertEqual(prog['db_stats']['companies_updated'], 30)
+        self.assertEqual(prog['db_stats']['directors_created'], 210)
+        self.assertEqual(prog['db_stats']['issues_created'], 4)
+
+    def test_set_progress_completed(self):
+        from hub.progress import init_progress, set_progress_completed, get_progress
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type='MCA',
+            stage='Publishing'
+        )
+        set_progress_completed(self.batch.batch_id, message='Published successfully')
+        prog = get_progress(self.batch.batch_id)
+        self.assertTrue(prog['is_completed'])
+        self.assertEqual(prog['percentage'], 100.0)
+        self.assertEqual(prog['status'], 'COMPLETED')
+        self.assertEqual(prog['eta_formatted'], '00:00')
+
+    def test_set_progress_failed(self):
+        from hub.progress import init_progress, set_progress_failed, get_progress
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type='MCA',
+            stage='Publishing'
+        )
+        set_progress_failed(self.batch.batch_id, error_message='Disk I/O failure')
+        prog = get_progress(self.batch.batch_id)
+        self.assertTrue(prog['is_failed'])
+        self.assertEqual(prog['status'], 'FAILED')
+        self.assertEqual(prog['error_message'], 'Disk I/O failure')
+
+    def test_progress_persistence_and_database_reconstruction(self):
+        from hub.progress import init_progress, _PROGRESS_STORE, get_progress
+        self.batch.status = 'COMPLETED'
+        self.batch.total_input_rows = 500
+        self.batch.imported_records = 500
+        self.batch.proposed_new_records = 400
+        self.batch.proposed_updates = 100
+        self.batch.save()
+
+        # Clear memory store to simulate reboot / cache miss
+        _PROGRESS_STORE.clear()
+
+        prog = get_progress(self.batch.batch_id)
+        self.assertEqual(prog['batch_id'], self.batch.batch_id)
+        self.assertEqual(prog['status'], 'COMPLETED')
+        self.assertEqual(prog['percentage'], 100.0)
+        self.assertEqual(prog['total_rows'], 500)
+        self.assertEqual(prog['processed_rows'], 500)
+        self.assertEqual(prog['db_stats']['companies_created'], 400)
+        self.assertEqual(prog['db_stats']['companies_updated'], 100)
+
+    def test_import_progress_api_unauthorized_access(self):
+        from django.urls import reverse
+        self.client.force_login(self.other_user)
+        url = reverse('hub:import_progress_api', kwargs={'batch_id': self.batch.batch_id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_import_progress_page_view_authorized(self):
+        from django.urls import reverse
+        self.client.force_login(self.user)
+        url = reverse('hub:import_progress_page', kwargs={'batch_id': self.batch.batch_id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'import/progress.html')

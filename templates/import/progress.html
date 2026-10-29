@@ -1,0 +1,322 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Import Progress - {{ batch.batch_id }} - Unified Data Hub{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0" style="max-width: 900px;">
+    {% include 'import/_progress_panel.html' %}
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const batchId = "{{ batch.batch_id }}";
+    const progressUrl = "{% url 'hub:import_progress_api' batch.batch_id %}";
+    const cancelUrl = "{% url 'hub:import_cancel' batch.batch_id %}";
+
+    // Progress elements
+    const progressBar = document.getElementById('mainProgressBar');
+    const percentageLabel = document.getElementById('progressPercentageLabel');
+    const stageLabel = document.getElementById('progressStageLabel');
+    const mainStageTitle = document.getElementById('mainStageTitle');
+    const stageBannerText = document.getElementById('stageBannerText');
+    const statusBadge = document.getElementById('operationStatusBadge');
+    const reconnectBanner = document.getElementById('reconnectBanner');
+
+    const progressRowCountText = document.getElementById('progressRowCountText');
+    const progressRateText = document.getElementById('progressRateText');
+
+    // KPI elements
+    const kpi1Title = document.getElementById('kpi1Title');
+    const processedCountDisplay = document.getElementById('processedCountDisplay');
+    const totalRowsSubtext = document.getElementById('totalRowsSubtext');
+
+    const kpi2Title = document.getElementById('kpi2Title');
+    const kpi2Value = document.getElementById('kpi2Value');
+    const kpi2Subtext = document.getElementById('kpi2Subtext');
+
+    const elapsedDisplay = document.getElementById('elapsedDisplay');
+    const etaDisplay = document.getElementById('etaDisplay');
+
+    // Stepper elements
+    const step3Nav = document.getElementById('step3Nav');
+    const step4Nav = document.getElementById('step4Nav');
+
+    // Database breakdown elements
+    const dbStatsBreakdown = document.getElementById('dbStatsBreakdown');
+    const dbCompCreated = document.getElementById('dbCompCreated');
+    const dbCompUpdated = document.getElementById('dbCompUpdated');
+    const dbDirCreated = document.getElementById('dbDirCreated');
+    const dbGstCreated = document.getElementById('dbGstCreated');
+    const dbGstUpdated = document.getElementById('dbGstUpdated');
+    const dbIssues = document.getElementById('dbIssues');
+
+    // Action areas
+    const cancelBtn = document.getElementById('cancelJobBtn');
+    const completionArea = document.getElementById('completionActionsArea');
+    const completionTitleText = document.getElementById('completionTitleText');
+    const completionSubtext = document.getElementById('completionSubtext');
+    const step3CompletionButtons = document.getElementById('step3CompletionButtons');
+    const step4CompletionButtons = document.getElementById('step4CompletionButtons');
+
+    const errorArea = document.getElementById('errorActionsArea');
+    const errorMessageDisplay = document.getElementById('errorMessageDisplay');
+
+    const mainSpinner = document.getElementById('mainSpinner');
+    const mainSuccessIcon = document.getElementById('mainSuccessIcon');
+    const mainErrorIcon = document.getElementById('mainErrorIcon');
+    const statusIconBox = document.getElementById('statusIconBox');
+
+    let pollInterval = null;
+    let failureCount = 0;
+
+    function updateUI(data) {
+        if (!data) return;
+
+        // Reset reconnecting banner if back online
+        if (reconnectBanner && !reconnectBanner.classList.contains('d-none')) {
+            reconnectBanner.classList.add('d-none');
+        }
+
+        // Stepper Navigation Sync
+        if (step3Nav && step4Nav) {
+            if (data.status === 'COMPLETED') {
+                step3Nav.className = 'stepper-step completed';
+                step3Nav.querySelector('.stepper-circle').innerHTML = '<i class="bi bi-check"></i>';
+                step4Nav.className = 'stepper-step completed';
+                step4Nav.querySelector('.stepper-circle').innerHTML = '<i class="bi bi-check"></i>';
+            } else if (data.step === 4) {
+                step3Nav.className = 'stepper-step completed';
+                step3Nav.querySelector('.stepper-circle').innerHTML = '<i class="bi bi-check"></i>';
+                step4Nav.className = 'stepper-step active';
+                step4Nav.querySelector('.stepper-circle').textContent = '4';
+            } else {
+                step3Nav.className = 'stepper-step active';
+                step3Nav.querySelector('.stepper-circle').textContent = '3';
+                step4Nav.className = 'stepper-step';
+                step4Nav.querySelector('.stepper-circle').textContent = '4';
+            }
+        }
+
+        // Status Badge
+        if (statusBadge && data.status) {
+            statusBadge.textContent = data.status;
+            if (data.status === 'COMPLETED') {
+                statusBadge.className = 'badge bg-success-subtle text-success border border-success-subtle px-2 py-1 small fw-semibold';
+            } else if (data.status === 'FAILED') {
+                statusBadge.className = 'badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1 small fw-semibold';
+            } else {
+                statusBadge.className = 'badge bg-light text-secondary border px-2 py-1 small fw-semibold';
+            }
+        }
+
+        // Stage & Description
+        if (data.stage) {
+            if (stageLabel) stageLabel.textContent = data.stage;
+            if (mainStageTitle) mainStageTitle.textContent = data.stage;
+        }
+        if (data.message && stageBannerText) {
+            stageBannerText.textContent = data.message;
+        }
+
+        // Progress Bar & Percentage
+        if (data.percentage !== null && data.percentage !== undefined) {
+            const pct = Math.min(100, Math.max(0, data.percentage));
+            progressBar.style.width = pct + '%';
+            progressBar.setAttribute('aria-valuenow', pct);
+            percentageLabel.textContent = pct.toFixed(1) + '%';
+            if (data.is_completed) {
+                progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+            } else {
+                progressBar.classList.add('progress-bar-striped');
+            }
+        } else {
+            // Indeterminate total
+            progressBar.style.width = '100%';
+            progressBar.classList.add('progress-bar-animated', 'progress-bar-striped');
+            percentageLabel.textContent = 'Processing...';
+        }
+
+        // Unit & Row count subtext
+        const unit = data.unit || 'rows';
+        const proc = data.processed_rows !== undefined ? data.processed_rows : 0;
+        if (processedCountDisplay) processedCountDisplay.textContent = proc.toLocaleString();
+
+        if (data.total_rows) {
+            if (totalRowsSubtext) totalRowsSubtext.textContent = 'of ' + data.total_rows.toLocaleString() + ' total';
+            if (progressRowCountText) progressRowCountText.textContent = proc.toLocaleString() + ' of ' + data.total_rows.toLocaleString() + ' ' + unit + ' processed';
+        } else {
+            if (totalRowsSubtext) totalRowsSubtext.textContent = 'total unknown';
+            if (progressRowCountText) progressRowCountText.textContent = proc.toLocaleString() + ' ' + unit + ' processed';
+        }
+
+        // Processing Speed
+        if (progressRateText) {
+            progressRateText.textContent = data.speed_formatted || '';
+        }
+
+        // Dynamic KPI 1 & 2
+        if (data.step === 4) {
+            if (kpi1Title) kpi1Title.textContent = 'Committed Rows';
+            if (kpi2Title) kpi2Title.textContent = 'Entities Created';
+            if (kpi2Subtext) kpi2Subtext.textContent = 'Authoritative writes';
+            if (kpi2Value) {
+                kpi2Value.className = 'fs-4 fw-bold text-success mt-1';
+                let entCount = 0;
+                if (data.db_stats) {
+                    entCount = (data.db_stats.companies_created || 0) + (data.db_stats.gst_created || 0);
+                }
+                kpi2Value.textContent = entCount.toLocaleString();
+            }
+        } else {
+            if (kpi1Title) kpi1Title.textContent = 'Processed Rows';
+            if (kpi2Title) kpi2Title.textContent = 'Validation Failures';
+            if (kpi2Subtext) kpi2Subtext.textContent = 'Flagged / Invalid';
+            if (kpi2Value) {
+                kpi2Value.className = 'fs-4 fw-bold text-warning mt-1';
+                const fails = data.validation_failures !== undefined ? data.validation_failures : 0;
+                kpi2Value.textContent = fails.toLocaleString();
+            }
+        }
+
+        // Elapsed Time
+        if (elapsedDisplay) {
+            elapsedDisplay.textContent = data.elapsed_formatted || '00:00';
+        }
+
+        // Estimated Time Left (smoothed approximate ETA)
+        if (etaDisplay) {
+            if (data.is_completed) {
+                etaDisplay.textContent = '00:00';
+            } else if (data.eta_formatted) {
+                etaDisplay.textContent = data.eta_formatted;
+            } else {
+                etaDisplay.textContent = '--';
+            }
+        }
+
+        // Database breakdown table updates
+        if (dbStatsBreakdown && (data.step === 4 || data.status === 'COMPLETED')) {
+            dbStatsBreakdown.classList.remove('d-none');
+            if (data.db_stats) {
+                if (dbCompCreated && data.db_stats.companies_created !== undefined) dbCompCreated.textContent = data.db_stats.companies_created.toLocaleString();
+                if (dbCompUpdated && data.db_stats.companies_updated !== undefined) dbCompUpdated.textContent = data.db_stats.companies_updated.toLocaleString();
+                if (dbDirCreated && data.db_stats.directors_created !== undefined) dbDirCreated.textContent = data.db_stats.directors_created.toLocaleString();
+                if (dbGstCreated && data.db_stats.gst_created !== undefined) dbGstCreated.textContent = data.db_stats.gst_created.toLocaleString();
+                if (dbGstUpdated && data.db_stats.gst_updated !== undefined) dbGstUpdated.textContent = data.db_stats.gst_updated.toLocaleString();
+                if (dbIssues && data.db_stats.issues_created !== undefined) dbIssues.textContent = data.db_stats.issues_created.toLocaleString();
+            }
+        }
+
+        // Completion Handling
+        if (data.is_completed) {
+            if (pollInterval) clearInterval(pollInterval);
+            progressBar.style.width = '100%';
+            progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped', 'bg-primary');
+            progressBar.classList.add('bg-success');
+            percentageLabel.textContent = '100%';
+
+            if (mainSpinner) mainSpinner.classList.add('d-none');
+            if (mainSuccessIcon) mainSuccessIcon.classList.remove('d-none');
+            if (statusIconBox) statusIconBox.className = 'rounded-circle bg-success-subtle text-success d-flex align-items-center justify-content-center';
+            if (cancelBtn) cancelBtn.classList.add('d-none');
+
+            if (completionArea) {
+                completionArea.classList.remove('d-none');
+                if (data.status === 'COMPLETED') {
+                    if (completionTitleText) completionTitleText.textContent = 'Database Publishing Complete!';
+                    if (completionSubtext) completionSubtext.textContent = 'All validated source records have been safely committed into the authoritative database.';
+                    if (step3CompletionButtons) step3CompletionButtons.classList.add('d-none');
+                    if (step4CompletionButtons) step4CompletionButtons.classList.remove('d-none');
+                } else {
+                    if (completionTitleText) completionTitleText.textContent = 'Staging and Validation Complete!';
+                    if (completionSubtext) completionSubtext.textContent = 'Cleaned candidate rows and validation diagnostics are ready for preview inspection.';
+                    if (step3CompletionButtons) step3CompletionButtons.classList.remove('d-none');
+                    if (step4CompletionButtons) step4CompletionButtons.classList.add('d-none');
+                }
+            }
+            if (errorArea) errorArea.classList.add('d-none');
+        }
+        // Failure Handling
+        else if (data.is_failed) {
+            if (pollInterval) clearInterval(pollInterval);
+            progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped', 'bg-primary');
+            progressBar.classList.add('bg-danger');
+
+            if (mainSpinner) mainSpinner.classList.add('d-none');
+            if (mainErrorIcon) mainErrorIcon.classList.remove('d-none');
+            if (statusIconBox) statusIconBox.className = 'rounded-circle bg-danger-subtle text-danger d-flex align-items-center justify-content-center';
+            if (cancelBtn) cancelBtn.classList.add('d-none');
+
+            if (errorMessageDisplay) errorMessageDisplay.textContent = data.error_message || 'An error occurred during dataset validation and processing.';
+            if (errorArea) errorArea.classList.remove('d-none');
+            if (completionArea) completionArea.classList.add('d-none');
+        }
+        // Cancelled Handling
+        else if (data.is_cancelled) {
+            if (pollInterval) clearInterval(pollInterval);
+            progressBar.classList.remove('bg-primary');
+            progressBar.classList.add('bg-secondary');
+            if (mainSpinner) mainSpinner.classList.add('d-none');
+            if (mainErrorIcon) mainErrorIcon.classList.remove('d-none');
+            if (cancelBtn) cancelBtn.classList.add('d-none');
+            if (stageBannerText) stageBannerText.textContent = 'Import job cancelled by user.';
+        }
+    }
+
+    function poll() {
+        fetch(progressUrl, {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            }
+        })
+        .then(res => {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(data => {
+            failureCount = 0;
+            updateUI(data);
+        })
+        .catch(err => {
+            failureCount++;
+            console.warn('Progress poll error (' + failureCount + '):', err);
+            // After 2 consecutive failures, show reconnecting alert banner
+            if (failureCount >= 2 && reconnectBanner) {
+                reconnectBanner.classList.remove('d-none');
+            }
+        });
+    }
+
+    // Cancel Button Handler
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', function() {
+            if (confirm('Are you sure you want to cancel this import job?')) {
+                cancelBtn.disabled = true;
+                cancelBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Cancelling...';
+                fetch(cancelUrl, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': '{{ csrf_token }}',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    poll();
+                })
+                .catch(err => {
+                    alert('Could not cancel job: ' + err);
+                    cancelBtn.disabled = false;
+                });
+            }
+        });
+    }
+
+    // Initial poll & start polling at 1000ms
+    poll();
+    pollInterval = setInterval(poll, 1000);
+});
+</script>
+{% endblock %}

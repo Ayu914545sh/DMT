@@ -19,7 +19,17 @@ urlpatterns = [
     path('import/<str:batch_id>/detail/', views.import_batch_detail_view, name='import_batch_detail'),
     path('import/<str:batch_id>/report/', views.download_cleaning_report_view, name='download_cleaning_report'),
     path('import/<str:batch_id>/cleaned-file/', views.download_cleaned_file_view, name='download_cleaned_file'),
+    path('import/<str:batch_id>/export/cleaned-master/', views.download_cleaned_master_view, name='download_cleaned_master'),
+    path('import/<str:batch_id>/export/calling-list/', views.download_ready_to_call_view, name='download_ready_to_call'),
+    path('import/<str:batch_id>/export/review-report/', views.download_review_report_view, name='download_review_report'),
+    path('import/<str:batch_id>/export/audit-output/', views.download_audit_output_view, name='download_audit_output'),
+    path('import/<str:batch_id>/export/summary/', views.download_processing_summary_view, name='download_processing_summary'),
     path('import/history/', views.import_history_view, name='import_history'),
+    path('import/history/clear-all/', views.import_history_clear_all_view, name='import_history_clear_all'),
+    path('import/<str:batch_id>/progress/', views.import_progress_api_view, name='import_progress_api'),
+    path('import/<str:batch_id>/progress-view/', views.import_progress_page_view, name='import_progress_page'),
+    path('import/<str:batch_id>/cancel/', views.import_cancel_view, name='import_cancel'),
+    path('import/active-progress/', views.import_active_progress_api_view, name='import_active_progress_api'),
 
     # MCA Module
     path('mca/', views.mca_list_view, name='mca_list'),
