@@ -545,7 +545,7 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
             _cache_set(_progress_cache_key(batch_id), final_info, timeout=86400)
             return final_info
 
-        # If in-memory or cached progress exists, ensure stage integrity
+        # If in-memory or cached progress exists, ensure stage integrity & watchdog
         if info:
             cur_stage = info.get('stage', '')
             if status in ('QUEUED', 'PROCESSING', 'STAGED') and ('Waiting for column mapping' in cur_stage or info.get('step', 3) < 3):
@@ -557,6 +557,20 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
                 with _PROGRESS_LOCK:
                     _PROGRESS_REGISTRY[batch_id] = info
                 _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
+
+            # Self-healing watchdog: if stuck in 'Queued' for > 10s with 0 progress, auto-heal with fallback thread
+            if status in ('QUEUED', 'PROCESSING') and 'Queued' in cur_stage and info.get('processed_rows', 0) == 0:
+                created_at = info.get('created_at') or info.get('start_time') or time.time()
+                if (time.time() - created_at) >= 10.0 and not info.get('is_completed') and not info.get('is_failed'):
+                    if not info.get('_fallback_spawned'):
+                        info['_fallback_spawned'] = True
+                        with _PROGRESS_LOCK:
+                            _PROGRESS_REGISTRY[batch_id] = info
+                        _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
+                        logger.warning(f"Batch {batch_id} queued for > 10s without worker pickup; engaging self-healing fallback worker.")
+                        update_progress(batch_id, stage='Validating and cleaning', status='PROCESSING', force_db_save=True)
+                        start_background_staging_job(batch_id, strict_phone=True, force_thread=True)
+
             return info
 
         # Fallback: reconstruct active/queued job faithfully from DB snapshot
@@ -814,19 +828,36 @@ def is_cancelled(batch_id: str) -> bool:
         return False
 
 
-def start_background_staging_job(batch_id: str, strict_phone: bool = True) -> Any:
+def _has_responsive_celery_worker() -> bool:
+    """Checks whether at least one Celery worker is currently online and responsive."""
+    try:
+        from dmt_project.celery import app
+        if not app:
+            return False
+        inspector = app.control.inspect(timeout=0.8)
+        pings = inspector.ping()
+        return bool(pings)
+    except Exception as e:
+        logger.debug(f"Celery inspect ping error: {e}")
+        return False
+
+
+def start_background_staging_job(batch_id: str, strict_phone: bool = True, force_thread: bool = False) -> Any:
     """
     Launches background staging job. Dispatches via Celery worker if available;
     otherwise falls back gracefully to a background daemon thread.
     Safely manages DB connections and updates real progress.
     """
-    use_celery = getattr(settings, 'USE_CELERY', False)
+    use_celery = getattr(settings, 'USE_CELERY', False) and not force_thread
     if use_celery:
         try:
-            from hub.tasks import stage_and_validate_batch_task
-            update_progress(batch_id, stage='Queued in Celery worker', status='PROCESSING', step=3, unit='rows', force_db_save=True)
-            async_res = stage_and_validate_batch_task.delay(batch_id, strict_phone=strict_phone)
-            return async_res
+            if _has_responsive_celery_worker():
+                from hub.tasks import stage_and_validate_batch_task
+                update_progress(batch_id, stage='Queued in Celery worker', status='PROCESSING', step=3, unit='rows', force_db_save=True)
+                async_res = stage_and_validate_batch_task.delay(batch_id, strict_phone=strict_phone)
+                return async_res
+            else:
+                logger.warning(f"No responsive Celery workers online; activating background daemon staging thread for {batch_id}.")
         except Exception as e:
             logger.warning(f"Could not dispatch to Celery for staging batch {batch_id} ({e}); falling back to background thread.")
 
@@ -895,18 +926,21 @@ def start_background_staging_job(batch_id: str, strict_phone: bool = True) -> An
     return thread
 
 
-def start_background_publication_job(batch_id: str, user_id: Optional[int] = None) -> Any:
+def start_background_publication_job(batch_id: str, user_id: Optional[int] = None, force_thread: bool = False) -> Any:
     """
     Launches publication job. Dispatches via Celery worker if available;
     otherwise falls back gracefully to a background daemon thread.
     """
-    use_celery = getattr(settings, 'USE_CELERY', False)
+    use_celery = getattr(settings, 'USE_CELERY', False) and not force_thread
     if use_celery:
         try:
-            from hub.tasks import process_import_batch_task
-            update_progress(batch_id, stage='Queued in Celery worker', status='IMPORTING', step=4, unit='source rows committed', force_db_save=True)
-            async_res = process_import_batch_task.delay(batch_id, user_id=user_id)
-            return async_res
+            if _has_responsive_celery_worker():
+                from hub.tasks import process_import_batch_task
+                update_progress(batch_id, stage='Queued in Celery worker', status='IMPORTING', step=4, unit='source rows committed', force_db_save=True)
+                async_res = process_import_batch_task.delay(batch_id, user_id=user_id)
+                return async_res
+            else:
+                logger.warning(f"No responsive Celery workers online; activating background daemon publication thread for {batch_id}.")
         except Exception as e:
             logger.warning(f"Could not dispatch to Celery for publishing batch {batch_id} ({e}); falling back to background thread.")
 

@@ -1,15 +1,13 @@
 """
 Celery asynchronous background tasks for data ingestion, staging, publication, and exports.
 Graceful execution supporting both async distributed workers and synchronous fallback.
+Defers model imports to avoid AppRegistryNotReady during task discovery.
 """
 
+import os
 import logging
 from typing import Optional, Any, Dict
-from django.contrib.auth.models import User
 from django.conf import settings
-from .models import ImportBatch, ExportJob
-from .importers import stage_and_validate_batch, execute_import_publication
-from .exporters import run_export_job
 from .progress import update_progress, set_progress_completed, set_progress_failed, is_cancelled
 
 logger = logging.getLogger(__name__)
@@ -35,6 +33,9 @@ def stage_and_validate_batch_task(self: Any, batch_id: str, strict_phone: bool =
     Celery task to run memory-bounded staging and data cleaning in the background.
     """
     try:
+        from .models import ImportBatch
+        from .importers import stage_and_validate_batch
+
         batch = ImportBatch.objects.filter(batch_id=batch_id).first()
         if not batch:
             set_progress_failed(batch_id, "Import batch record not found.")
@@ -43,7 +44,6 @@ def stage_and_validate_batch_task(self: Any, batch_id: str, strict_phone: bool =
         if is_cancelled(batch_id):
             return {'status': 'CANCELLED'}
 
-        import os
         if not batch.file_path or not os.path.exists(batch.file_path):
             err_msg = f"Uploaded file not accessible on worker filesystem: {batch.file_path}"
             logger.error(err_msg)
@@ -97,6 +97,10 @@ def process_import_batch_task(self: Any, batch_id: Any, user_id: Optional[int] =
     Celery task to publish a staged import batch idempotently with checkpoints.
     """
     try:
+        from django.contrib.auth.models import User
+        from .models import ImportBatch
+        from .importers import execute_import_publication
+
         if isinstance(batch_id, int):
             batch = ImportBatch.objects.get(id=batch_id)
         else:
@@ -142,6 +146,9 @@ def process_export_job_task(self: Any, job_id: int) -> Any:
     Celery task to generate a CSV or Excel export file with streaming memory.
     """
     try:
+        from .models import ExportJob
+        from .exporters import run_export_job
+
         job = ExportJob.objects.get(id=job_id)
         path = run_export_job(job)
         return {'status': 'COMPLETED', 'file_path': path}

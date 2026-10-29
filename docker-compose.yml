@@ -76,6 +76,8 @@ services:
       dockerfile: Dockerfile
     restart: always
     command: celery -A dmt_project worker --loglevel=info --concurrency=2
+    healthcheck:
+      disable: true
     environment:
       DJANGO_DEBUG: "False"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-prod-secret-key-mca-gst-2026}
