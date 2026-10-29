@@ -69,9 +69,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let pollInterval = null;
     let failureCount = 0;
+    let lastTimestamp = 0;
+    let lastProcessedRows = 0;
 
     function updateUI(data) {
         if (!data) return;
+
+        // Discard stale or out-of-order poll responses from round-robin workers
+        if (data.timestamp && data.timestamp < lastTimestamp) {
+            return;
+        }
+        if (data.timestamp) {
+            lastTimestamp = data.timestamp;
+        }
+
+        // Monotonic guard: do not regress processed rows within the active processing stage
+        if (data.processed_rows !== undefined) {
+            if (data.processed_rows < lastProcessedRows && !data.is_failed && !data.is_cancelled && data.status === 'PROCESSING') {
+                data.processed_rows = lastProcessedRows;
+            } else if (data.processed_rows > lastProcessedRows) {
+                lastProcessedRows = data.processed_rows;
+            }
+        }
 
         // Reset reconnecting banner if back online
         if (reconnectBanner && !reconnectBanner.classList.contains('d-none')) {
@@ -131,10 +150,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 progressBar.classList.add('progress-bar-striped');
             }
         } else {
-            // Indeterminate total
-            progressBar.style.width = '100%';
+            // Indeterminate total: keep width at 0% unless completed, do not falsely fill bar to 100%
+            progressBar.style.width = '0%';
             progressBar.classList.add('progress-bar-animated', 'progress-bar-striped');
-            percentageLabel.textContent = 'Processing...';
+            percentageLabel.textContent = (data.stage && data.stage.toLowerCase().includes('queue')) ? 'Queued' : 'Processing...';
         }
 
         // Unit & Row count subtext
@@ -268,8 +287,10 @@ document.addEventListener('DOMContentLoaded', function() {
         fetch(progressUrl, {
             headers: {
                 'X-Requested-With': 'XMLHttpRequest',
-                'Accept': 'application/json'
-            }
+                'Accept': 'application/json',
+                'Cache-Control': 'no-cache, no-store'
+            },
+            cache: 'no-store'
         })
         .then(res => {
             if (!res.ok) throw new Error('HTTP ' + res.status);

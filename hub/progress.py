@@ -16,11 +16,55 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# Thread-safe in-memory registry for ultra-low latency status polling
+import uuid
+
+# Thread-safe in-memory registry and distributed cache integration
 _PROGRESS_LOCK = threading.Lock()
 _PROGRESS_REGISTRY: Dict[str, Dict[str, Any]] = {}
 _PROGRESS_STORE = _PROGRESS_REGISTRY
 _CANCEL_SET = set()
+
+
+def _progress_cache_key(batch_id: str) -> str:
+    return f"import_progress:{batch_id}"
+
+
+def _cancel_cache_key(batch_id: str) -> str:
+    return f"import_cancel:{batch_id}"
+
+
+def _cache_get(key: str) -> Optional[Any]:
+    try:
+        from django.core.cache import cache
+        return cache.get(key)
+    except Exception as e:
+        logger.debug(f"Cache get failed for {key}: {e}")
+        return None
+
+
+def _cache_set(key: str, value: Any, timeout: int = 86400) -> None:
+    try:
+        from django.core.cache import cache
+        cache.set(key, value, timeout=timeout)
+    except Exception as e:
+        logger.debug(f"Cache set failed for {key}: {e}")
+
+
+def _cache_delete(key: str) -> None:
+    try:
+        from django.core.cache import cache
+        cache.delete(key)
+    except Exception as e:
+        logger.debug(f"Cache delete failed for {key}: {e}")
+
+
+def clear_progress_cache(batch_id: str) -> None:
+    """Clears progress and cancel tokens from distributed cache and local process memory."""
+    _cache_delete(_progress_cache_key(batch_id))
+    _cache_delete(_cancel_cache_key(batch_id))
+    with _PROGRESS_LOCK:
+        _PROGRESS_REGISTRY.pop(batch_id, None)
+        _CANCEL_SET.discard(batch_id)
 
 
 def format_duration(seconds: Optional[float]) -> str:
@@ -129,8 +173,9 @@ def init_progress(
     }
     with _PROGRESS_LOCK:
         _PROGRESS_REGISTRY[batch_id] = info
-        if batch_id in _CANCEL_SET:
-            _CANCEL_SET.remove(batch_id)
+        _CANCEL_SET.discard(batch_id)
+    _cache_delete(_cancel_cache_key(batch_id))
+    _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
     return info
 
 
@@ -280,13 +325,15 @@ def update_progress(
             dur = info.get('duration_formatted') or format_duration(elapsed)
             info['message'] = f"{cur_stage}: Completed in {dur} — {proc:,} {cur_unit} processed."
         elif info.get('percentage') is not None and tot:
-            info['message'] = f"{cur_stage} — {int(info['percentage'])}% ({proc:,} / {tot:,} {cur_unit})"
+            info['message'] = f"{cur_stage} — {int(info['percentage'])}% ({proc:,} of {tot:,} {cur_unit} processed)"
         elif proc > 0:
             info['message'] = f"{cur_stage} — {proc:,} {cur_unit} processed"
         else:
             info['message'] = f"{cur_stage}..."
 
         info['timestamp'] = now
+        # Always mirror to distributed cache for multi-worker and multi-container access
+        _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
 
         # Throttle DB persistence: at most once every 1.5 seconds unless forced or terminal
         should_persist = force_db_save or (now - info.get('last_db_persist', 0) >= 1.5)
@@ -361,18 +408,37 @@ def _persist_progress_to_db(batch_id: str, info: Dict[str, Any]) -> None:
 
 def get_progress(batch_id: str) -> Dict[str, Any]:
     """
-    Returns the current progress state.
-    Checks memory registry first; if missing (e.g. after refresh), reconstructs faithfully from DB.
+    Returns the current progress state with multi-worker / multi-container synchronization.
+    Checks process memory (L1), distributed cache (L2), and database snapshot (L3) with stage integrity.
     """
     with _PROGRESS_LOCK:
-        if batch_id in _PROGRESS_REGISTRY:
-            return dict(_PROGRESS_REGISTRY[batch_id])
+        local_info = dict(_PROGRESS_REGISTRY[batch_id]) if batch_id in _PROGRESS_REGISTRY else None
 
-    # Reconstruct from DB
+    cached_info = _cache_get(_progress_cache_key(batch_id))
+
+    info: Optional[Dict[str, Any]] = None
+    if local_info and cached_info:
+        if cached_info.get('timestamp', 0) >= local_info.get('timestamp', 0):
+            info = dict(cached_info)
+            with _PROGRESS_LOCK:
+                _PROGRESS_REGISTRY[batch_id] = dict(cached_info)
+        else:
+            info = dict(local_info)
+            _cache_set(_progress_cache_key(batch_id), local_info, timeout=86400)
+    elif cached_info:
+        info = dict(cached_info)
+        with _PROGRESS_LOCK:
+            _PROGRESS_REGISTRY[batch_id] = dict(cached_info)
+    elif local_info:
+        info = dict(local_info)
+        _cache_set(_progress_cache_key(batch_id), local_info, timeout=86400)
+
     try:
         from hub.models import ImportBatch
         batch = ImportBatch.objects.filter(batch_id=batch_id).first()
         if not batch:
+            if info:
+                return info
             return {
                 'batch_id': batch_id,
                 'stage': 'Unknown',
@@ -388,39 +454,116 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
                 'error_message': 'Import job record not found.'
             }
 
-        summary = batch.cleaning_summary or {}
-        saved_progress = summary.get('progress') or {}
-
         status = batch.status
         is_completed = (status == 'COMPLETED' or status == 'PREVIEWED')
         is_failed = (status == 'FAILED')
         is_cancelled = (status == 'CANCELLED')
 
-        if status == 'COMPLETED':
-            stage = saved_progress.get('stage') or 'Database Publishing Complete'
-            step = 4
-            unit = 'source rows committed'
-            pct = 100.0
-            output_ready = True
-        elif status == 'PREVIEWED':
-            stage = saved_progress.get('stage') or 'Validation and Cleaning Complete'
-            step = 3
-            unit = 'rows'
-            pct = 100.0
-            output_ready = True
-        elif status == 'FAILED':
-            stage = saved_progress.get('stage') or 'Failed'
-            step = saved_progress.get('step', 3)
-            unit = saved_progress.get('unit', 'rows')
-            pct = None
-            output_ready = False
-        elif status == 'CANCELLED':
-            stage = 'Cancelled'
-            step = saved_progress.get('step', 3)
-            unit = saved_progress.get('unit', 'rows')
-            pct = None
-            output_ready = False
-        elif status == 'UPLOADED':
+        # If batch reached terminal status in DB, DB state is authoritative
+        if status in ('COMPLETED', 'PREVIEWED', 'FAILED', 'CANCELLED'):
+            summary = batch.cleaning_summary or {}
+            saved_progress = summary.get('progress') or {}
+
+            if status == 'COMPLETED':
+                stage = saved_progress.get('stage') or 'Database Publishing Complete'
+                step = 4
+                unit = 'source rows committed'
+                pct = 100.0
+                output_ready = True
+            elif status == 'PREVIEWED':
+                stage = saved_progress.get('stage') or 'Validation and Cleaning Complete'
+                step = 3
+                unit = 'rows'
+                pct = 100.0
+                output_ready = True
+            elif status == 'FAILED':
+                stage = saved_progress.get('stage') or 'Failed'
+                step = saved_progress.get('step', 3)
+                unit = saved_progress.get('unit', 'rows')
+                pct = None
+                output_ready = False
+            else:  # CANCELLED
+                stage = 'Cancelled'
+                step = saved_progress.get('step', 3)
+                unit = saved_progress.get('unit', 'rows')
+                pct = None
+                output_ready = False
+
+            total = batch.total_input_rows
+            processed = saved_progress.get('processed_rows', total if is_completed else 0)
+            if is_completed and total:
+                processed = total
+
+            dur = saved_progress.get('duration_formatted') or saved_progress.get('elapsed_formatted', '')
+            final_info = {
+                'batch_id': batch.batch_id,
+                'dataset_type': batch.dataset_type,
+                'stage': saved_progress.get('stage', stage),
+                'status': status,
+                'step': saved_progress.get('step', step),
+                'unit': saved_progress.get('unit', unit),
+                'total_rows': total,
+                'processed_rows': processed,
+                'percentage': pct,
+                'speed_rate': 0.0,
+                'speed_formatted': '',
+                'validation_failures': saved_progress.get('validation_failures', batch.missing_invalid_values + batch.quarantined_rows),
+                'missing_invalid': batch.missing_invalid_values,
+                'quarantined': batch.quarantined_rows,
+                'proposed_new': batch.proposed_new_records,
+                'proposed_updates': batch.proposed_updates,
+                'unchanged': batch.unchanged_records,
+                'db_stats': saved_progress.get('db_stats') or ({
+                    'companies_created': batch.proposed_new_records or 0,
+                    'companies_updated': batch.proposed_updates or 0,
+                    'directors_created': 0,
+                    'issues_created': 0
+                } if batch.dataset_type == 'MCA' else {
+                    'gst_created': batch.proposed_new_records or 0,
+                    'gst_updated': batch.proposed_updates or 0,
+                    'issues_created': 0
+                }),
+                'elapsed_seconds': saved_progress.get('elapsed_seconds', 0.0),
+                'eta_seconds': 0.0 if is_completed else None,
+                'elapsed_formatted': saved_progress.get('elapsed_formatted', dur or '00:00'),
+                'duration_formatted': dur,
+                'eta_formatted': '00:00' if is_completed else '',
+                'message': saved_progress.get('message', f"{stage}"),
+                'error_message': batch.error_message or '',
+                'output_ready': output_ready,
+                'is_completed': is_completed,
+                'is_failed': is_failed,
+                'is_cancelled': is_cancelled,
+                'timestamp': time.time(),
+                'download_report_url': reverse('hub:download_cleaning_report', kwargs={'batch_id': batch.batch_id}),
+                'download_cleaned_url': reverse('hub:download_cleaned_file', kwargs={'batch_id': batch.batch_id}),
+                'preview_url': reverse('hub:import_preview', kwargs={'batch_id': batch.batch_id}),
+                'batch_detail_url': reverse('hub:import_batch_detail', kwargs={'batch_id': batch.batch_id}),
+            }
+            with _PROGRESS_LOCK:
+                _PROGRESS_REGISTRY[batch_id] = final_info
+            _cache_set(_progress_cache_key(batch_id), final_info, timeout=86400)
+            return final_info
+
+        # If in-memory or cached progress exists, ensure stage integrity
+        if info:
+            cur_stage = info.get('stage', '')
+            if status in ('QUEUED', 'PROCESSING', 'STAGED') and ('Waiting for column mapping' in cur_stage or info.get('step', 3) < 3):
+                use_celery = getattr(settings, 'USE_CELERY', False)
+                info['stage'] = 'Queued in Celery worker' if use_celery else 'Queued for processing'
+                info['step'] = 3
+                if batch.total_input_rows and not info.get('total_rows'):
+                    info['total_rows'] = batch.total_input_rows
+                with _PROGRESS_LOCK:
+                    _PROGRESS_REGISTRY[batch_id] = info
+                _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
+            return info
+
+        # Fallback: reconstruct active/queued job faithfully from DB snapshot
+        summary = batch.cleaning_summary or {}
+        saved_progress = summary.get('progress') or {}
+
+        if status == 'UPLOADED':
             stage = 'Waiting for column mapping'
             step = 2
             unit = 'rows'
@@ -446,7 +589,7 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
             output_ready = False
 
         total = batch.total_input_rows
-        processed = saved_progress.get('processed_rows', total if is_completed else 0)
+        processed = saved_progress.get('processed_rows', 0)
 
         info = {
             'batch_id': batch.batch_id,
@@ -480,13 +623,13 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
             'eta_seconds': saved_progress.get('eta_seconds'),
             'elapsed_formatted': saved_progress.get('elapsed_formatted', '00:00'),
             'duration_formatted': saved_progress.get('duration_formatted', ''),
-            'eta_formatted': saved_progress.get('eta_formatted', '00:00' if is_completed else ''),
+            'eta_formatted': saved_progress.get('eta_formatted', ''),
             'message': saved_progress.get('message', f"{stage}"),
             'error_message': batch.error_message or '',
             'output_ready': output_ready,
-            'is_completed': is_completed,
-            'is_failed': is_failed,
-            'is_cancelled': is_cancelled,
+            'is_completed': False,
+            'is_failed': False,
+            'is_cancelled': False,
             'timestamp': time.time(),
             'download_report_url': reverse('hub:download_cleaning_report', kwargs={'batch_id': batch.batch_id}),
             'download_cleaned_url': reverse('hub:download_cleaned_file', kwargs={'batch_id': batch.batch_id}),
@@ -496,6 +639,7 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
 
         with _PROGRESS_LOCK:
             _PROGRESS_REGISTRY[batch_id] = info
+        _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
         return info
 
     except Exception as e:
@@ -627,7 +771,7 @@ def set_progress_failed(batch_id: str, error_message: str, step: Optional[int] =
 
 
 def request_cancel(batch_id: str) -> None:
-    """Sets the cancellation flag for an import job."""
+    """Sets the cancellation flag across process memory, distributed cache, and DB."""
     with _PROGRESS_LOCK:
         _CANCEL_SET.add(batch_id)
         info = _PROGRESS_REGISTRY.get(batch_id)
@@ -639,11 +783,35 @@ def request_cancel(batch_id: str) -> None:
             info['timestamp'] = time.time()
             _persist_progress_to_db(batch_id, info)
 
+    _cache_set(_cancel_cache_key(batch_id), True, timeout=86400)
+    cached = _cache_get(_progress_cache_key(batch_id))
+    if cached:
+        cached['stage'] = 'Cancelled'
+        cached['status'] = 'CANCELLED'
+        cached['is_cancelled'] = True
+        cached['message'] = "Import job cancelled by user."
+        cached['timestamp'] = time.time()
+        _cache_set(_progress_cache_key(batch_id), cached, timeout=86400)
+
+    try:
+        from hub.models import ImportBatch
+        ImportBatch.objects.filter(batch_id=batch_id).update(status='CANCELLED')
+    except Exception as e:
+        logger.warning(f"Could not persist CANCELLED status to DB for batch {batch_id}: {e}")
+
 
 def is_cancelled(batch_id: str) -> bool:
-    """Checks whether an import job was cancelled."""
+    """Checks whether an import job was cancelled via process memory, distributed cache, or DB."""
     with _PROGRESS_LOCK:
-        return batch_id in _CANCEL_SET
+        if batch_id in _CANCEL_SET:
+            return True
+    if _cache_get(_cancel_cache_key(batch_id)) is True:
+        return True
+    try:
+        from hub.models import ImportBatch
+        return ImportBatch.objects.filter(batch_id=batch_id, status='CANCELLED').exists()
+    except Exception:
+        return False
 
 
 def start_background_staging_job(batch_id: str, strict_phone: bool = True) -> Any:

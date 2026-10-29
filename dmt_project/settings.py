@@ -166,6 +166,41 @@ USE_CELERY = os.environ.get('USE_CELERY', 'True').lower() in ('true', '1')
 CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_ALWAYS_EAGER', 'True') == 'True'
 CELERY_TASK_EAGER_PROPAGATES = True
 
+# Distributed Cache configuration for multi-worker and multi-container state sharing
+import sys
+IS_TESTING = 'test' in sys.argv or any('test' in arg for arg in sys.argv)
+REDIS_CACHE_URL = os.environ.get('REDIS_URL', CELERY_BROKER_URL)
+# In Docker/production, CELERY_BROKER_URL is redis://redis:6379/0 (container hostname 'redis').
+# On local host, default localhost:6379 may not be running, so use LocMemCache unless explicitly configured.
+USE_REDIS_CACHE = (
+    not IS_TESTING
+    and REDIS_CACHE_URL
+    and not REDIS_CACHE_URL.startswith('memory://')
+    and (bool(os.environ.get('REDIS_URL')) or ('localhost' not in REDIS_CACHE_URL and '127.0.0.1' not in REDIS_CACHE_URL))
+)
+
+if USE_REDIS_CACHE:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_CACHE_URL,
+            'TIMEOUT': 86400,
+            'KEY_PREFIX': 'dmt',
+            'OPTIONS': {
+                'socket_connect_timeout': 2.0,
+                'socket_timeout': 2.0,
+            }
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'dmt-locmem',
+            'TIMEOUT': 86400,
+        }
+    }
+
 # django-import-export configuration
 IMPORT_EXPORT_USE_TRANSACTIONS = True
 IMPORT_EXPORT_SKIP_ADMIN_LOG = False

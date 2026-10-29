@@ -4823,3 +4823,103 @@ class LiveProgressWorkflowTestCase(TestCase):
 
         resp2 = self.client.get('/healthz')
         self.assertEqual(resp2.status_code, 200)
+
+
+class MultiWorkerProgressConsistencyTests(TestCase):
+    """
+    Tests ensuring multi-worker consistency across Gunicorn web workers and Celery background workers.
+    Verifies state sharing via distributed cache, elimination of stale stage oscillation,
+    monotonic progress guarding, and distributed cancellation.
+    """
+    def setUp(self):
+        from hub.models import ImportBatch
+        from django.contrib.auth.models import User
+        self.user = User.objects.create_user(username='worker_test_user', password='password123')
+        self.batch = ImportBatch.objects.create(
+            batch_id='BATCH-MULTI-WORKER-001',
+            dataset_type='MCA',
+            file_name='Data1.xlsx',
+            file_path='/tmp/fake.xlsx',
+            file_checksum='a1b2c3d4e5f6',
+            file_format='XLSX',
+            status='UPLOADED',
+            created_by=self.user,
+            mapping_config={'columns': {'CIN': 'entityId', 'Company Name': 'name'}}
+        )
+
+    def test_multi_worker_stage_integrity_no_reversion_to_waiting(self):
+        """
+        Simulates Gunicorn Worker 1 having upload-stage in-memory state while
+        Worker 2 processes mapping confirmation. Worker 1 must never revert stage to 'Waiting for column mapping'.
+        """
+        from hub.progress import init_progress, update_progress, get_progress, clear_progress_cache, _PROGRESS_REGISTRY
+
+        # Worker 1 registers upload stage
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type=self.batch.dataset_type,
+            stage='Waiting for column mapping',
+            step=2,
+            total_rows=None
+        )
+
+        # Worker 2 processes mapping confirmation: sets status QUEUED in DB and clears old cache
+        self.batch.status = 'QUEUED'
+        self.batch.total_input_rows = 100000
+        self.batch.save()
+        clear_progress_cache(self.batch.batch_id)
+
+        # Worker 2 queues Celery task
+        init_progress(
+            batch_id=self.batch.batch_id,
+            dataset_type=self.batch.dataset_type,
+            stage='Queued in Celery worker',
+            total_rows=100000,
+            step=3
+        )
+
+        # Worker 1 receives poll request: must return Queued in Celery worker (step 3), not Waiting for column mapping
+        prog = get_progress(self.batch.batch_id)
+        self.assertEqual(prog['step'], 3)
+        self.assertEqual(prog['stage'], 'Queued in Celery worker')
+        self.assertEqual(prog['total_rows'], 100000)
+        self.assertNotEqual(prog['stage'], 'Waiting for column mapping')
+
+    def test_monotonic_processed_rows_across_updates(self):
+        """Ensures out-of-order worker updates cannot regress processed_rows."""
+        from hub.progress import init_progress, update_progress, get_progress, clear_progress_cache
+        clear_progress_cache(self.batch.batch_id)
+        init_progress(self.batch.batch_id, dataset_type='MCA', stage='Validating and cleaning', total_rows=1000)
+
+        update_progress(self.batch.batch_id, processed_rows=500)
+        p1 = get_progress(self.batch.batch_id)
+        self.assertEqual(p1['processed_rows'], 500)
+
+        # Delayed update from slower worker tries to regress processed_rows to 250
+        update_progress(self.batch.batch_id, processed_rows=250)
+        p2 = get_progress(self.batch.batch_id)
+        self.assertEqual(p2['processed_rows'], 500)
+
+    def test_distributed_cancellation_visibility(self):
+        """Ensures cancellation triggered in one process is visible across all workers."""
+        from hub.progress import init_progress, request_cancel, is_cancelled, clear_progress_cache
+        clear_progress_cache(self.batch.batch_id)
+        init_progress(self.batch.batch_id, dataset_type='MCA', stage='Validating and cleaning', total_rows=1000)
+
+        self.assertFalse(is_cancelled(self.batch.batch_id))
+
+        # Web worker triggers cancel
+        request_cancel(self.batch.batch_id)
+
+        # Celery background worker checking is_cancelled must receive True
+        self.assertTrue(is_cancelled(self.batch.batch_id))
+
+    def test_progress_api_no_cache_headers(self):
+        """Verifies progress API responses carry Cache-Control: no-cache to avoid proxy caching."""
+        from django.urls import reverse
+        self.client.force_login(self.user)
+        url = reverse('hub:import_progress_api', kwargs={'batch_id': self.batch.batch_id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('no-cache', response.headers.get('Cache-Control', ''))
+        self.assertIn('no-store', response.headers.get('Cache-Control', ''))

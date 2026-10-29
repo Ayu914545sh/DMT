@@ -54,7 +54,7 @@ from .exporters import (
 from .progress import (
     init_progress, update_progress, get_progress, request_cancel,
     start_background_staging_job, start_background_publication_job,
-    count_file_rows_bounded
+    count_file_rows_bounded, clear_progress_cache
 )
 
 
@@ -638,11 +638,15 @@ def import_map_view(request, batch_id):
                 header_row=batch.header_row_index,
                 sheet_name=batch.sheet_name
             )
+        # Invalidate old upload-stage progress cache so Gunicorn workers cannot see stale state
+        clear_progress_cache(batch.batch_id)
+        use_celery = getattr(settings, 'USE_CELERY', False)
         init_progress(
             batch_id=batch.batch_id,
             dataset_type=batch.dataset_type,
-            stage='Queued for processing',
-            total_rows=total_rows
+            stage='Queued in Celery worker' if use_celery else 'Queued for processing',
+            total_rows=total_rows,
+            step=3
         )
 
         # Run staging & validation asynchronously in background daemon
@@ -1158,7 +1162,10 @@ def import_progress_api_view(request, batch_id):
     if not request.user.is_superuser and batch.created_by != request.user:
         return JsonResponse({'error': 'Unauthorized'}, status=403)
     data = get_progress(batch_id)
-    return JsonResponse(data)
+    response = JsonResponse(data)
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    return response
 
 
 @login_required

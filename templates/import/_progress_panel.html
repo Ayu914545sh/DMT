@@ -85,7 +85,7 @@
                 <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
                      role="progressbar" 
                      id="mainProgressBar"
-                     style="width: {% if progress.percentage is not None %}{{ progress.percentage }}{% else %}100{% endif %}%;"
+                     style="width: {% if progress.percentage is not None %}{{ progress.percentage }}{% else %}0{% endif %}%;"
                      aria-valuenow="{% if progress.percentage is not None %}{{ progress.percentage }}{% else %}0{% endif %}" 
                      aria-valuemin="0" 
                      aria-valuemax="100">

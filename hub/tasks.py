@@ -43,6 +43,13 @@ def stage_and_validate_batch_task(self: Any, batch_id: str, strict_phone: bool =
         if is_cancelled(batch_id):
             return {'status': 'CANCELLED'}
 
+        import os
+        if not batch.file_path or not os.path.exists(batch.file_path):
+            err_msg = f"Uploaded file not accessible on worker filesystem: {batch.file_path}"
+            logger.error(err_msg)
+            set_progress_failed(batch_id, err_msg, step=3)
+            return {'status': 'FAILED', 'error': err_msg}
+
         update_progress(batch_id, stage='Validating and cleaning', status='PROCESSING', force_db_save=True)
 
         def _progress_cb(processed: int, total: Optional[int], failures: int, interim_stats: Optional[Dict] = None, stage: Optional[str] = None):
