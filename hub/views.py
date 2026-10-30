@@ -595,6 +595,16 @@ def import_map_view(request, batch_id):
             for w in warnings:
                 messages.warning(request, w)
             
+        # Duplicate submission guard: if batch is already actively processing, redirect immediately
+        if batch.status in ('PROCESSING', 'QUEUED'):
+            if is_ajax:
+                return JsonResponse({
+                    'success': True,
+                    'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id}),
+                    'progress_url': reverse('hub:import_progress_api', kwargs={'batch_id': batch.batch_id})
+                })
+            return redirect('hub:import_progress_page', batch_id=batch.batch_id)
+
         # Invalidate any previously staged rows and reset preview metrics on mapping change
         invalidate_stale_exports_for_batch(batch.batch_id)
         StagedRow.objects.filter(batch=batch).delete()
@@ -953,8 +963,9 @@ def import_execute_view(request, batch_id):
         return redirect('hub:import_batch_detail', batch_id=batch.batch_id)
 
     if request.method == 'POST':
-        start_background_publication_job(batch.batch_id, user_id=request.user.id)
-        batch.refresh_from_db()
+        if batch.status != 'IMPORTING':
+            start_background_publication_job(batch.batch_id, user_id=request.user.id)
+            batch.refresh_from_db()
 
         if is_ajax:
             return JsonResponse({

@@ -393,7 +393,7 @@ def _persist_progress_to_db(batch_id: str, info: Dict[str, Any]) -> None:
             batch.status = cur_status
             update_fields.append('status')
 
-        if info.get('total_rows'):
+        if info.get('total_rows') and (not batch.total_input_rows or batch.total_input_rows == 0):
             batch.total_input_rows = info['total_rows']
             update_fields.append('total_input_rows')
 
@@ -565,29 +565,32 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
                     _PROGRESS_REGISTRY[batch_id] = info
                 _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
 
-            # Self-healing watchdog: if stuck in 'Queued' for > 10s with 0 progress, auto-heal with fallback thread
+            # Self-healing watchdog: only if truly stalled without worker activity and not handled by Celery
+            staging_locked = bool(_cache_get(f"staging_lock_{batch_id}"))
+            publish_locked = bool(_cache_get(f"publish_lock_{batch_id}"))
+
             if status in ('QUEUED', 'PROCESSING') and 'Queued' in cur_stage and info.get('processed_rows', 0) == 0:
                 created_at = info.get('created_at') or info.get('start_time') or time.time()
-                if (time.time() - created_at) >= 10.0 and not info.get('is_completed') and not info.get('is_failed'):
+                if not staging_locked and not getattr(settings, 'USE_CELERY', False) and (time.time() - created_at) >= 60.0 and not info.get('is_completed') and not info.get('is_failed'):
                     if not info.get('_fallback_spawned'):
                         info['_fallback_spawned'] = True
                         with _PROGRESS_LOCK:
                             _PROGRESS_REGISTRY[batch_id] = info
                         _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
-                        logger.warning(f"Batch {batch_id} queued for > 10s without worker pickup; engaging self-healing fallback worker.")
+                        logger.warning(f"Batch {batch_id} queued without worker pickup; engaging self-healing fallback worker.")
                         update_progress(batch_id, stage='Validating and cleaning', status='PROCESSING', force_db_save=True)
                         start_background_staging_job(batch_id, strict_phone=True, force_thread=True)
 
-            # Self-healing watchdog for Step 4 (Publication): if stuck in 'IMPORTING' / 'Queued' with 0 processed rows for > 8s
+            # Self-healing watchdog for Step 4 (Publication):
             if (status == 'IMPORTING' or 'Queued' in cur_stage) and info.get('step', 0) == 4 and info.get('processed_rows', 0) == 0:
                 created_at = info.get('start_time') or info.get('created_at') or time.time()
-                if (time.time() - created_at) >= 8.0 and not info.get('is_completed') and not info.get('is_failed'):
+                if not publish_locked and not getattr(settings, 'USE_CELERY', False) and (time.time() - created_at) >= 60.0 and not info.get('is_completed') and not info.get('is_failed'):
                     if not info.get('_pub_fallback_spawned'):
                         info['_pub_fallback_spawned'] = True
                         with _PROGRESS_LOCK:
                             _PROGRESS_REGISTRY[batch_id] = info
                         _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
-                        logger.warning(f"Batch {batch_id} publication queued for > 8s without worker pickup; engaging self-healing publication thread.")
+                        logger.warning(f"Batch {batch_id} publication queued without worker pickup; engaging self-healing publication thread.")
                         start_background_publication_job(batch_id, force_thread=True)
 
             return info
@@ -865,6 +868,11 @@ def start_background_staging_job(batch_id: str, strict_phone: bool = True, force
     otherwise falls back gracefully to a background daemon thread.
     Safely manages DB connections and updates real progress.
     """
+    lock_key = f"staging_lock_{batch_id}"
+    if not force_thread and _cache_get(lock_key):
+        logger.warning(f"Staging already running for batch {batch_id}; skipping duplicate start.")
+        return None
+
     use_celery = getattr(settings, 'USE_CELERY', False) and not force_thread
     if use_celery:
         try:
@@ -880,6 +888,8 @@ def start_background_staging_job(batch_id: str, strict_phone: bool = True, force
 
     def _worker():
         close_old_connections()
+        lock_key = f"staging_lock_{batch_id}"
+        _cache_set(lock_key, True, timeout=1800)
         try:
             from hub.models import ImportBatch
             from hub.importers import stage_and_validate_batch
@@ -936,6 +946,7 @@ def start_background_staging_job(batch_id: str, strict_phone: bool = True, force
             else:
                 set_progress_failed(batch_id, str(e), step=3)
         finally:
+            _cache_delete(lock_key)
             close_old_connections()
 
     thread = threading.Thread(target=_worker, name=f"StagingWorker-{batch_id}", daemon=True)
@@ -952,13 +963,22 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
     otherwise falls back gracefully to a background daemon thread.
     Durably initializes Step 4 progress upfront to prevent stale Step 3 state.
     """
+    lock_key = f"publish_lock_{batch_id}"
+    if not force_thread and _cache_get(lock_key):
+        logger.warning(f"Publication already running for batch {batch_id}; skipping duplicate start.")
+        return None
+
     from hub.models import ImportBatch, StagedRow
     batch = ImportBatch.objects.filter(batch_id=batch_id).first()
-    total_staged = 0
+    total_source_rows = 1
     dataset_type = 'MCA'
     if batch:
         dataset_type = batch.dataset_type
-        total_staged = StagedRow.objects.filter(batch=batch).count() or batch.total_input_rows or 1
+        total_source_rows = batch.total_input_rows
+        if not total_source_rows or total_source_rows == 0:
+            total_source_rows = StagedRow.objects.filter(batch=batch).values('row_number').distinct().count() or 1
+            batch.total_input_rows = total_source_rows
+            batch.save(update_fields=['total_input_rows'])
         if batch.status != 'IMPORTING':
             batch.status = 'IMPORTING'
             batch.save(update_fields=['status'])
@@ -970,7 +990,7 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
         batch_id,
         dataset_type=dataset_type,
         stage=stage_name,
-        total_rows=total_staged,
+        total_rows=total_source_rows,
         step=4,
         unit='source rows committed'
     )
@@ -980,8 +1000,8 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
         status='IMPORTING',
         step=4,
         unit='source rows committed',
-        processed_rows=0,
-        total_rows=total_staged,
+        processed_rows=batch.imported_records or batch.checkpoint_row or 0,
+        total_rows=total_source_rows,
         db_stats={'companies_created': 0, 'companies_updated': 0, 'directors_created': 0, 'gst_created': 0, 'gst_updated': 0, 'issues_created': 0},
         force_db_save=True
     )
@@ -999,6 +1019,8 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
 
     def _worker():
         close_old_connections()
+        lock_key = f"publish_lock_{batch_id}"
+        _cache_set(lock_key, True, timeout=1800)
         try:
             from hub.models import ImportBatch
             from django.contrib.auth.models import User
@@ -1039,6 +1061,7 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
             logger.error(f"Error during background publication for batch {batch_id}: {e}", exc_info=True)
             set_progress_failed(batch_id, str(e), step=4)
         finally:
+            _cache_delete(lock_key)
             close_old_connections()
 
     thread = threading.Thread(target=_worker, name=f"PublishWorker-{batch_id}", daemon=True)

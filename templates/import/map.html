@@ -639,8 +639,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Ensure required columns are selected and form validity checked before submit
+    let mappingSubmitting = false;
     if (mappingForm) {
         mappingForm.addEventListener('submit', function(e) {
+            if (mappingSubmitting) {
+                e.preventDefault();
+                return false;
+            }
             let checkedCount = 0;
             includeCheckboxes.forEach(cb => {
                 if (cb.checked) checkedCount++;
@@ -650,6 +655,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Please select at least one column to import.');
                 return false;
             }
+            mappingSubmitting = true;
 
             // Show immediate progress feedback on submit
             const submitBtn = mappingForm.querySelector('button[type="submit"]');

@@ -406,6 +406,9 @@ class StagedRow(models.Model):
         verbose_name = "Staged Row"
         verbose_name_plural = "Staged Rows"
         ordering = ['batch', 'row_number']
+        constraints = [
+            models.UniqueConstraint(fields=['batch', 'row_number'], name='unique_staged_row_per_batch')
+        ]
         indexes = [
             models.Index(fields=['batch', 'row_number']),
             models.Index(fields=['batch', 'is_processed']),

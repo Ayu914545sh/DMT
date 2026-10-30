@@ -1037,7 +1037,7 @@ def stage_and_validate_batch(batch: ImportBatch, strict_phone: bool = True, prog
                 diff_summary=diff
             ))
 
-        StagedRow.objects.bulk_create(staged_to_create, batch_size=batch_write_size)
+        StagedRow.objects.bulk_create(staged_to_create, batch_size=batch_write_size, ignore_conflicts=True)
         if not sample_staged_records:
             sample_staged_records.extend([
                 {
@@ -1484,8 +1484,13 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
     batch_size = getattr(settings, 'IMPORT_BATCH_SIZE', 2000)
     start_row = batch.checkpoint_row or 0
     staged_qs = StagedRow.objects.filter(batch=batch, is_processed=False, row_number__gt=start_row).order_by('row_number')
+    total_source_rows = batch.total_input_rows
+    if not total_source_rows or total_source_rows == 0:
+        total_source_rows = StagedRow.objects.filter(batch=batch).values('row_number').distinct().count() or 1
+        batch.total_input_rows = total_source_rows
+        batch.save(update_fields=['total_input_rows'])
     total_staged = StagedRow.objects.filter(batch=batch).count()
-    imported_count = batch.imported_records or 0
+    imported_count = batch.imported_records or start_row
     plan = ImportProcessingPlan(batch)
 
     db_stats = {
@@ -1497,6 +1502,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
         'issues_created': 0,
         'batches_committed': 0,
         'rows_committed': imported_count,
+        'total_source_rows': total_source_rows,
         'total_staged': total_staged,
     }
 
@@ -1819,7 +1825,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
 
             # Update checkpoint durably
             last_row_num = chunk[-1].row_number
-            imported_count += len(chunk)
+            imported_count = max(imported_count, last_row_num)
             batch.checkpoint_row = last_row_num
             batch.imported_records = imported_count
             batch.save(update_fields=['checkpoint_row', 'imported_records'])
@@ -1827,7 +1833,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
             db_stats['rows_committed'] = imported_count
 
         if progress_callback:
-            _safe_call_publication_progress(progress_callback, imported_count, total_staged, db_stats=dict(db_stats))
+            _safe_call_publication_progress(progress_callback, imported_count, total_source_rows, db_stats=dict(db_stats))
 
     try:
         for staged in staged_qs.iterator(chunk_size=batch_size):
@@ -1846,7 +1852,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
             chunk_rows = []
 
         if progress_callback:
-            _safe_call_publication_progress(progress_callback, imported_count, total_staged, db_stats=dict(db_stats), stage="Finalizing database indexes & audit logs")
+            _safe_call_publication_progress(progress_callback, imported_count, total_source_rows, db_stats=dict(db_stats), stage="Finalizing database indexes & audit logs")
 
         batch.imported_records = imported_count
         batch.status = 'COMPLETED'

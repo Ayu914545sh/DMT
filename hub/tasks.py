@@ -8,7 +8,7 @@ import os
 import logging
 from typing import Optional, Any, Dict
 from django.conf import settings
-from .progress import update_progress, set_progress_completed, set_progress_failed, is_cancelled
+from .progress import update_progress, set_progress_completed, set_progress_failed, is_cancelled, _cache_set, _cache_delete
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,8 @@ def stage_and_validate_batch_task(self: Any, batch_id: str, strict_phone: bool =
     """
     Celery task to run memory-bounded staging and data cleaning in the background.
     """
+    lock_key = f"staging_lock_{batch_id}"
+    _cache_set(lock_key, True, timeout=1800)
     try:
         from .models import ImportBatch
         from .importers import stage_and_validate_batch
@@ -89,6 +91,8 @@ def stage_and_validate_batch_task(self: Any, batch_id: str, strict_phone: bool =
         if hasattr(self, 'retry') and not getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
             raise self.retry(exc=exc, countdown=10)
         raise exc
+    finally:
+        _cache_delete(lock_key)
 
 
 @shared_task(bind=True, max_retries=3)
@@ -96,6 +100,8 @@ def process_import_batch_task(self: Any, batch_id: Any, user_id: Optional[int] =
     """
     Celery task to publish a staged import batch idempotently with checkpoints.
     """
+    lock_key = f"publish_lock_{batch_id}"
+    _cache_set(lock_key, True, timeout=1800)
     try:
         from django.contrib.auth.models import User
         from .models import ImportBatch
@@ -138,6 +144,8 @@ def process_import_batch_task(self: Any, batch_id: Any, user_id: Optional[int] =
         if hasattr(self, 'retry') and not getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
             raise self.retry(exc=exc, countdown=10)
         raise exc
+    finally:
+        _cache_delete(lock_key)
 
 
 @shared_task(bind=True, max_retries=2)
