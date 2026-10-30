@@ -518,9 +518,16 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
                     'companies_updated': batch.proposed_updates or 0,
                     'directors_created': 0,
                     'issues_created': 0
-                } if batch.dataset_type == 'MCA' else {
+                } if (status == 'COMPLETED' and batch.dataset_type == 'MCA') else {
                     'gst_created': batch.proposed_new_records or 0,
                     'gst_updated': batch.proposed_updates or 0,
+                    'issues_created': 0
+                } if (status == 'COMPLETED' and batch.dataset_type == 'GST') else {
+                    'companies_created': 0,
+                    'companies_updated': 0,
+                    'directors_created': 0,
+                    'gst_created': 0,
+                    'gst_updated': 0,
                     'issues_created': 0
                 }),
                 'elapsed_seconds': saved_progress.get('elapsed_seconds', 0.0),
@@ -570,6 +577,18 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
                         logger.warning(f"Batch {batch_id} queued for > 10s without worker pickup; engaging self-healing fallback worker.")
                         update_progress(batch_id, stage='Validating and cleaning', status='PROCESSING', force_db_save=True)
                         start_background_staging_job(batch_id, strict_phone=True, force_thread=True)
+
+            # Self-healing watchdog for Step 4 (Publication): if stuck in 'IMPORTING' / 'Queued' with 0 processed rows for > 8s
+            if (status == 'IMPORTING' or 'Queued' in cur_stage) and info.get('step', 0) == 4 and info.get('processed_rows', 0) == 0:
+                created_at = info.get('start_time') or info.get('created_at') or time.time()
+                if (time.time() - created_at) >= 8.0 and not info.get('is_completed') and not info.get('is_failed'):
+                    if not info.get('_pub_fallback_spawned'):
+                        info['_pub_fallback_spawned'] = True
+                        with _PROGRESS_LOCK:
+                            _PROGRESS_REGISTRY[batch_id] = info
+                        _cache_set(_progress_cache_key(batch_id), info, timeout=86400)
+                        logger.warning(f"Batch {batch_id} publication queued for > 8s without worker pickup; engaging self-healing publication thread.")
+                        start_background_publication_job(batch_id, force_thread=True)
 
             return info
 
@@ -623,16 +642,14 @@ def get_progress(batch_id: str) -> Dict[str, Any]:
             'proposed_new': batch.proposed_new_records,
             'proposed_updates': batch.proposed_updates,
             'unchanged': batch.unchanged_records,
-            'db_stats': saved_progress.get('db_stats') or ({
-                'companies_created': batch.proposed_new_records or 0,
-                'companies_updated': batch.proposed_updates or 0,
-                'directors_created': 0,
-                'issues_created': 0
-            } if batch.dataset_type == 'MCA' else {
-                'gst_created': batch.proposed_new_records or 0,
-                'gst_updated': batch.proposed_updates or 0,
-                'issues_created': 0
-            }),
+            'db_stats': saved_progress.get('db_stats') or {
+                    'companies_created': 0,
+                    'companies_updated': 0,
+                    'directors_created': 0,
+                    'gst_created': 0,
+                    'gst_updated': 0,
+                    'issues_created': 0,
+                },
             'elapsed_seconds': saved_progress.get('elapsed_seconds', 0.0),
             'eta_seconds': saved_progress.get('eta_seconds'),
             'elapsed_formatted': saved_progress.get('elapsed_formatted', '00:00'),
@@ -923,6 +940,9 @@ def start_background_staging_job(batch_id: str, strict_phone: bool = True, force
 
     thread = threading.Thread(target=_worker, name=f"StagingWorker-{batch_id}", daemon=True)
     thread.start()
+    import sys
+    if 'test' in sys.argv:
+        thread.join(timeout=30)
     return thread
 
 
@@ -930,13 +950,46 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
     """
     Launches publication job. Dispatches via Celery worker if available;
     otherwise falls back gracefully to a background daemon thread.
+    Durably initializes Step 4 progress upfront to prevent stale Step 3 state.
     """
+    from hub.models import ImportBatch, StagedRow
+    batch = ImportBatch.objects.filter(batch_id=batch_id).first()
+    total_staged = 0
+    dataset_type = 'MCA'
+    if batch:
+        dataset_type = batch.dataset_type
+        total_staged = StagedRow.objects.filter(batch=batch).count() or batch.total_input_rows or 1
+        if batch.status != 'IMPORTING':
+            batch.status = 'IMPORTING'
+            batch.save(update_fields=['status'])
+
     use_celery = getattr(settings, 'USE_CELERY', False) and not force_thread
+    stage_name = 'Queued in Celery worker' if use_celery else 'Preparing database publish'
+
+    init_progress(
+        batch_id,
+        dataset_type=dataset_type,
+        stage=stage_name,
+        total_rows=total_staged,
+        step=4,
+        unit='source rows committed'
+    )
+    update_progress(
+        batch_id,
+        stage=stage_name,
+        status='IMPORTING',
+        step=4,
+        unit='source rows committed',
+        processed_rows=0,
+        total_rows=total_staged,
+        db_stats={'companies_created': 0, 'companies_updated': 0, 'directors_created': 0, 'gst_created': 0, 'gst_updated': 0, 'issues_created': 0},
+        force_db_save=True
+    )
+
     if use_celery:
         try:
             if _has_responsive_celery_worker():
                 from hub.tasks import process_import_batch_task
-                update_progress(batch_id, stage='Queued in Celery worker', status='IMPORTING', step=4, unit='source rows committed', force_db_save=True)
                 async_res = process_import_batch_task.delay(batch_id, user_id=user_id)
                 return async_res
             else:
@@ -951,32 +1004,12 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
             from django.contrib.auth.models import User
             from hub.importers import execute_import_publication
 
-            batch = ImportBatch.objects.filter(batch_id=batch_id).first()
-            if not batch:
+            b = ImportBatch.objects.filter(batch_id=batch_id).first()
+            if not b:
                 set_progress_failed(batch_id, "Import batch record not found.", step=4)
                 return
 
             user = User.objects.filter(id=user_id).first() if user_id else None
-
-            # Stage: Preparing database publish
-            total_staged = batch.total_input_rows or 1
-            init_progress(
-                batch_id,
-                dataset_type=batch.dataset_type,
-                stage='Preparing database publish',
-                total_rows=total_staged,
-                step=4,
-                unit='source rows committed'
-            )
-            update_progress(
-                batch_id,
-                stage='Preparing database publish',
-                status='IMPORTING',
-                step=4,
-                unit='source rows committed',
-                processed_rows=0,
-                force_db_save=True
-            )
 
             def _progress_cb(processed: int, total: int, db_stats: Optional[Dict] = None, stage: Optional[str] = None):
                 update_progress(
@@ -990,16 +1023,15 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
                     db_stats=db_stats
                 )
 
-            res = execute_import_publication(batch, user=user, progress_callback=_progress_cb)
+            res = execute_import_publication(b, user=user, progress_callback=_progress_cb)
 
-            # Stage: Completed
             set_progress_completed(batch_id, summary={
-                'total_rows': batch.total_input_rows,
-                'proposed_new': batch.proposed_new_records,
-                'proposed_updates': batch.proposed_updates,
-                'unchanged': batch.unchanged_records,
-                'quarantined': batch.quarantined_rows,
-                'missing_invalid': batch.missing_invalid_values,
+                'total_rows': b.total_input_rows,
+                'proposed_new': b.proposed_new_records,
+                'proposed_updates': b.proposed_updates,
+                'unchanged': b.unchanged_records,
+                'quarantined': b.quarantined_rows,
+                'missing_invalid': b.missing_invalid_values,
                 'db_stats': res.get('db_stats') if isinstance(res, dict) else {},
             }, final_status='COMPLETED', step=4)
 
@@ -1011,4 +1043,7 @@ def start_background_publication_job(batch_id: str, user_id: Optional[int] = Non
 
     thread = threading.Thread(target=_worker, name=f"PublishWorker-{batch_id}", daemon=True)
     thread.start()
+    import sys
+    if 'test' in sys.argv:
+        thread.join(timeout=30)
     return thread

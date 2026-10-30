@@ -227,8 +227,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
-        // Completion Handling
-        if (data.is_completed) {
+        // Completion Handling: Only complete Step 4 if status is COMPLETED; never show Step 3 completion on Step 4
+        if (data.step === 4 && data.status !== 'COMPLETED') {
+            if (completionArea) completionArea.classList.add('d-none');
+            if (cancelBtn) cancelBtn.classList.remove('d-none');
+        } else if (data.is_completed && (data.status === 'COMPLETED' || data.step === 3 || data.status === 'PREVIEWED')) {
             if (pollInterval) clearInterval(pollInterval);
             progressBar.style.width = '100%';
             progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped', 'bg-primary');

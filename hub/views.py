@@ -741,7 +741,7 @@ def import_preview_view(request, batch_id):
     Step 3: Staging review, conflict inspection, and publication approval.
     """
     batch = get_object_or_404(ImportBatch, batch_id=batch_id)
-    if batch.status in ('PROCESSING', 'QUEUED', 'IMPORTING'):
+    if batch.status in ('PROCESSING', 'QUEUED'):
         return redirect('hub:import_progress_page', batch_id=batch.batch_id)
     
     staged_qs = StagedRow.objects.filter(batch=batch).order_by('row_number')
@@ -938,6 +938,7 @@ def download_processing_summary_view(request, batch_id):
 def import_execute_view(request, batch_id):
     """
     Step 4: Execute publication atomically with background progress tracking.
+    Supports resuming or re-executing if a background task was stalled.
     """
     batch = get_object_or_404(ImportBatch, batch_id=batch_id)
     is_ajax = request.headers.get('x-requested-with') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', '')
@@ -946,11 +947,6 @@ def import_execute_view(request, batch_id):
         if is_ajax:
             return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_batch_detail', kwargs={'batch_id': batch.batch_id})})
         return redirect('hub:import_batch_detail', batch_id=batch.batch_id)
-
-    if batch.status in ('IMPORTING', 'PROCESSING'):
-        if is_ajax:
-            return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id})})
-        return redirect('hub:import_progress_page', batch_id=batch.batch_id)
 
     if request.method == 'POST':
         start_background_publication_job(batch.batch_id, user_id=request.user.id)
@@ -963,6 +959,10 @@ def import_execute_view(request, batch_id):
                 'progress_url': reverse('hub:import_progress_api', kwargs={'batch_id': batch.batch_id})
             })
         return redirect('hub:import_progress_page', batch_id=batch.batch_id)
+
+    if batch.status in ('IMPORTING', 'PROCESSING'):
+        if is_ajax:
+            return JsonResponse({'success': True, 'redirect_url': reverse('hub:import_progress_page', kwargs={'batch_id': batch.batch_id})})
         return redirect('hub:import_progress_page', batch_id=batch.batch_id)
 
     return redirect('hub:import_preview', batch_id=batch.batch_id)

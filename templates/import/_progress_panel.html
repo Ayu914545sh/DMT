@@ -208,7 +208,7 @@
         </div>
 
         <!-- Completion Actions Area -->
-        <div id="completionActionsArea" class="{% if not progress.is_completed %}d-none{% endif %} pt-3 border-top">
+        <div id="completionActionsArea" class="{% if not progress.is_completed or progress.step == 4 and progress.status != 'COMPLETED' %}d-none{% endif %} pt-3 border-top">
             <div class="alert alert-success border-success-subtle mb-3 d-flex align-items-center gap-2" id="completionAlertBanner">
                 <i class="bi bi-check-circle-fill text-success fs-4"></i>
                 <div>
@@ -231,7 +231,7 @@
 
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-2" id="completionActionButtons">
                 <!-- If completed step 3 (Preview ready) -->
-                <div id="step3CompletionButtons" class="{% if progress.status == 'COMPLETED' %}d-none{% endif %} d-flex flex-wrap align-items-center justify-content-between w-100 gap-2">
+                <div id="step3CompletionButtons" class="{% if progress.status == 'COMPLETED' or progress.step == 4 %}d-none{% endif %} d-flex flex-wrap align-items-center justify-content-between w-100 gap-2">
                     <div class="btn-group">
                         <a href="{% url 'hub:download_cleaning_report' batch.batch_id %}" class="btn btn-outline-primary btn-sm fw-semibold">
                             <i class="bi bi-file-earmark-arrow-down me-1"></i> Download Cleaning Report

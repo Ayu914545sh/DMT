@@ -1502,7 +1502,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                 }
 
                 to_create_companies = {}
-                to_update_companies = []
+                to_update_companies = {}
                 staged_company_refs = {}
 
                 for s in chunk:
@@ -1537,7 +1537,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                             updated = True
                         if updated:
                             comp.revision += 1
-                            to_update_companies.append(comp)
+                            to_update_companies[e_id] = comp
                         staged_company_refs[s.id] = comp
                     elif e_id in to_create_companies:
                         comp = to_create_companies[e_id]
@@ -1594,7 +1594,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                     if plan.has_doi:
                         fields_to_update.append('date_of_incorporation')
                     MCACompany.objects.bulk_update(
-                        to_update_companies,
+                        list(to_update_companies.values()),
                         fields=fields_to_update
                     )
                     db_stats['companies_updated'] += len(to_update_companies)
@@ -1674,7 +1674,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                 }
 
                 to_create_gst = {}
-                to_update_gst = []
+                to_update_gst = {}
                 issues_to_create = []
 
                 for s in chunk:
@@ -1721,7 +1721,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                             updated = True
                         if updated:
                             rec.revision += 1
-                            to_update_gst.append(rec)
+                            to_update_gst[gst_no] = rec
                     elif gst_no in to_create_gst:
                         rec = to_create_gst[gst_no]
                         if c_data.get('trade_name'):
@@ -1791,7 +1791,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                     if plan.has_pincode:
                         fields_to_update.append('pincode')
                     GSTRecord.objects.bulk_update(
-                        to_update_gst,
+                        list(to_update_gst.values()),
                         fields=fields_to_update
                     )
                     db_stats['gst_updated'] += len(to_update_gst)
