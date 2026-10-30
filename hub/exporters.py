@@ -139,8 +139,7 @@ def export_mca_dataset(queryset, columns: Optional[List[str]] = None, file_forma
                 elif col in ('raw_mobile', 'original_phone'):
                     row.append("; ".join(d.raw_mobile for d in directors if d.raw_mobile))
                 elif col in ('canonical_mobile', 'cleaned_phone'):
-                    valid_nums = [_valid_phone_or_blank(d.canonical_mobile, d.contact_validity) for d in directors]
-                    row.append("; ".join(v for v in valid_nums if v))
+                    row.append("; ".join(d.canonical_mobile for d in directors if d.canonical_mobile and d.contact_validity in ('valid', 'cleaned', 'multiple_numbers_review')))
                 elif col in ('contact_validity', 'phone_status'):
                     row.append("; ".join(d.contact_validity for d in directors if d.contact_validity))
                 elif col == 'designation':
@@ -181,7 +180,7 @@ def export_gst_dataset(queryset, columns: Optional[List[str]] = None, file_forma
             row = []
             for col in columns:
                 if col in ('canonical_mobile', 'cleaned_phone'):
-                    row.append(_valid_phone_or_blank(rec.canonical_mobile, rec.contact_validity))
+                    row.append(rec.canonical_mobile if (rec.canonical_mobile and rec.contact_validity in ('valid', 'cleaned', 'multiple_numbers_review')) else "")
                 else:
                     row.append(getattr(rec, col, ""))
             yield row
@@ -290,7 +289,7 @@ def export_cleaned_master_data(batch, file_format: str = 'CSV', export_dir: Opti
             ('din', 'DIN', lambda s, c: c.get('din') or c.get('clean_din', ''), 'din'),
             ('directorName', 'Director Name', lambda s, c: c.get('directorName', ''), 'directorName'),
             ('designation', 'Designation', lambda s, c: ('Director' if c.get('directorName') else ''), 'directorName'),
-            ('directorMobile', 'Normalized Phone', lambda s, c: _valid_phone_or_blank(c.get('canonical_mobile'), c.get('phone_validity')), 'directorMobile'),
+            ('directorMobile', 'Normalized Phone', lambda s, c: (s.canonical_mobile if c.get('phone_validity') in ('valid', 'cleaned', 'multiple_numbers_review') else ''), 'directorMobile'),
             ('extension', 'Extension', lambda s, c: c.get('extension', ''), 'directorMobile'),
             ('secondary_phones', 'Secondary Phones', lambda s, c: (", ".join(c.get('secondary_phones', [])) if c.get('secondary_phones') else ""), 'directorMobile'),
             ('phone_validity', 'Phone Validity', lambda s, c: c.get('phone_validity', 'missing'), 'directorMobile'),
@@ -312,7 +311,7 @@ def export_cleaned_master_data(batch, file_format: str = 'CSV', export_dir: Opti
             ('registration_date', 'Registration Date', lambda s, c: c.get('clean_registration_date') or c.get('registration_date', ''), 'registration_date'),
             ('gst_type', 'GST Type', lambda s, c: c.get('gst_type', ''), 'gst_type'),
             ('pan', 'PAN', lambda s, c: c.get('pan', ''), 'pan'),
-            ('mobile', 'Normalized Phone', lambda s, c: _valid_phone_or_blank(c.get('canonical_mobile'), c.get('phone_validity')), 'mobile'),
+            ('mobile', 'Normalized Phone', lambda s, c: (s.canonical_mobile if c.get('phone_validity') in ('valid', 'cleaned', 'multiple_numbers_review') else ''), 'mobile'),
             ('extension', 'Extension', lambda s, c: c.get('extension', ''), 'mobile'),
             ('secondary_phones', 'Secondary Phones', lambda s, c: (", ".join(c.get('secondary_phones', [])) if c.get('secondary_phones') else ""), 'mobile'),
             ('phone_validity', 'Phone Validity', lambda s, c: c.get('phone_validity', 'missing'), 'mobile'),
@@ -371,7 +370,12 @@ def export_cleaned_master_data(batch, file_format: str = 'CSV', export_dir: Opti
             'Original Raw Phone', 'Phone Validity', 'Rejection / Validation Reason', 'Rejected Parts'
         ]
         def _review_gen():
-            for s in staged_rows.iterator(chunk_size=export_chunk_size):
+            # Uses indexed validation_status rather than re-scanning entire staged_rows table
+            review_qs = StagedRow.objects.filter(
+                batch=batch,
+                validation_status__in=['WARNING', 'FLAGGED', 'ERROR']
+            ).order_by('row_number')
+            for s in review_qs.iterator(chunk_size=export_chunk_size):
                 c = s.cleaned_data
                 pstat = c.get('phone_validity')
                 rej = c.get('rejected_phones') or []
@@ -470,33 +474,32 @@ def export_ready_to_call_list(batch, file_format: str = 'CSV', export_dir: Optio
     ]
 
     export_chunk_size = getattr(settings, 'EXPORT_CHUNK_SIZE', 5000)
-    # Stream ordered by canonical_mobile so consecutive rows belong to the same phone
+    # Stream ordered by canonical_mobile with database-level eligibility filtering
     staged_qs = StagedRow.objects.filter(
         batch=batch
-    ).exclude(canonical_mobile='').order_by('canonical_mobile', 'row_number')
+    ).exclude(
+        canonical_mobile=''
+    ).exclude(
+        proposed_action='QUARANTINE'
+    ).exclude(
+        validation_status='ERROR'
+    ).order_by('canonical_mobile', 'row_number')
 
     def _row_gen():
         current_phone = None
         occurrences = []
 
         for s in staged_qs.iterator(chunk_size=export_chunk_size):
-            if s.proposed_action == 'QUARANTINE' or s.validation_status == 'ERROR':
-                continue
             c = s.cleaned_data
             phone = s.canonical_mobile
-            if not phone:
-                continue
-            digits = re.sub(r'\D', '', str(phone))
-            if len(digits) != 10 or digits[0] not in '6789' or re.match(r'^(\d)\1{9}$', digits):
-                continue
-            if c.get('phone_validity') not in ('valid', 'cleaned', 'multiple_numbers_review'):
+            if not phone or c.get('phone_validity') not in ('valid', 'cleaned', 'multiple_numbers_review'):
                 continue
 
-            if current_phone is not None and digits != current_phone:
+            if current_phone is not None and phone != current_phone:
                 yield _build_ready_to_call_row(current_phone, occurrences, batch)
                 occurrences = []
 
-            current_phone = digits
+            current_phone = phone
             occurrences.append((s.row_number, c))
 
         if current_phone is not None and occurrences:

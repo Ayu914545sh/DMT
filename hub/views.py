@@ -1140,12 +1140,7 @@ def download_cleaning_report_view(request, batch_id):
         entity_id = cleaned.get('entityId') or cleaned.get('gst_number') or ""
         extra_json = json.dumps(cleaned.get('extra_data', {})) if cleaned.get('extra_data') else ""
         validity = cleaned.get('phone_validity') or cleaned.get('phone_status') or ""
-        clean_mob = ""
-        if validity in ('valid', 'cleaned', 'multiple_numbers_review'):
-            raw_c = cleaned.get('canonical_mobile') or cleaned.get('cleaned_phone') or ""
-            d = re.sub(r'\D', '', str(raw_c))
-            if len(d) == 10 and d[0] in '6789' and not re.match(r'^(\d)\1{9}$', d):
-                clean_mob = d
+        clean_mob = s.canonical_mobile if validity in ('valid', 'cleaned', 'multiple_numbers_review') else ""
 
         writer.writerow([
             s.row_number,

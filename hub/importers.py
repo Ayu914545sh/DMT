@@ -1052,6 +1052,8 @@ def stage_and_validate_batch(batch: ImportBatch, strict_phone: bool = True, prog
             ])
 
     plan = ImportProcessingPlan(batch, strict_phone=strict_phone)
+    # Per-job normalization cache: validates each unique phone string exactly once (O(1) reuse across rows)
+    phone_norm_cache: Dict[str, Dict[str, Any]] = {}
 
     for row_idx, raw_row_dict in iter_raw_dataset_rows(batch, max_rows=max_rows, selected_columns=plan.selected_columns):
         total_rows += 1
@@ -1177,7 +1179,12 @@ def stage_and_validate_batch(batch: ImportBatch, strict_phone: bool = True, prog
                 # Director Phone cleaning strictly if director mobile selected
                 if plan.has_director_mobile and 'directorMobile' in cleaned_row:
                     raw_mobile = cleaned_row.get('directorMobile', '')
-                    phone_res = clean_phone_extended(raw_mobile, strict_prefix=strict_phone, default_ownership='director')
+                    phone_key = str(raw_mobile).strip() if raw_mobile is not None else ""
+                    if phone_key in phone_norm_cache:
+                        phone_res = phone_norm_cache[phone_key]
+                    else:
+                        phone_res = clean_phone_extended(raw_mobile, strict_prefix=strict_phone, default_ownership='director')
+                        phone_norm_cache[phone_key] = phone_res
                     
                     phone_status = phone_res['status']
                     canonical_phone = phone_res['primary_phone'] if (phone_res['primary_phone'] and phone_status in ('valid', 'cleaned', 'multiple_numbers_review')) else None
@@ -1246,7 +1253,12 @@ def stage_and_validate_batch(batch: ImportBatch, strict_phone: bool = True, prog
                 # Clean mobile strictly if selected
                 if plan.has_mobile and 'mobile' in cleaned_row:
                     raw_mobile = cleaned_row.get('mobile', '')
-                    phone_res = clean_phone_extended(raw_mobile, strict_prefix=strict_phone, default_ownership='company')
+                    phone_key = str(raw_mobile).strip() if raw_mobile is not None else ""
+                    if phone_key in phone_norm_cache:
+                        phone_res = phone_norm_cache[phone_key]
+                    else:
+                        phone_res = clean_phone_extended(raw_mobile, strict_prefix=strict_phone, default_ownership='company')
+                        phone_norm_cache[phone_key] = phone_res
                     
                     phone_status = phone_res['status']
                     canonical_phone = phone_res['primary_phone'] if (phone_res['primary_phone'] and phone_status in ('valid', 'cleaned', 'multiple_numbers_review')) else None
@@ -1622,12 +1634,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                         if dir_name:
                             raw_mobile = c_data.get('original_phone') or c_data.get('directorMobile') or ''
                             phone_validity = c_data.get('phone_validity') or 'missing'
-                            clean_valid_phone = None
-                            if s.canonical_mobile and phone_validity in ('valid', 'cleaned', 'multiple_numbers_review'):
-                                clean_digits = re.sub(r'\D', '', str(s.canonical_mobile))
-                                if len(clean_digits) == 10 and clean_digits[0] in '6789' and not re.match(r'^(\d)\1{9}$', clean_digits):
-                                    clean_valid_phone = clean_digits
-                            canonical_mobile = clean_valid_phone
+                            canonical_mobile = s.canonical_mobile or None
                             dir_email = c_data.get('directorEmail') or ''
                             designation = 'Designated Partner' if comp.entity_type == 'llp' else 'Director'
 
@@ -1699,12 +1706,7 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                     insert_time, _, _ = clean_timestamp(c_data.get('insert_time'))
                     raw_mobile = c_data.get('original_phone') or c_data.get('mobile') or ''
                     phone_validity = c_data.get('phone_validity') or 'missing'
-                    clean_valid_phone = None
-                    if s.canonical_mobile and phone_validity in ('valid', 'cleaned', 'multiple_numbers_review'):
-                        clean_digits = re.sub(r'\D', '', str(s.canonical_mobile))
-                        if len(clean_digits) == 10 and clean_digits[0] in '6789' and not re.match(r'^(\d)\1{9}$', clean_digits):
-                            clean_valid_phone = clean_digits
-                    canonical_mobile = clean_valid_phone
+                    canonical_mobile = s.canonical_mobile or None
                     clean_pin = (c_data.get('clean_pincode') or c_data.get('Pincode') or '')[:32]
 
                     lineage = {

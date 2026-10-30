@@ -10,6 +10,18 @@ import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Tuple, Any, Dict, List
 
+PHONE_VALIDATION_RULE_VERSION = "2026.10.phone_v2"
+
+RE_EXTENSION = re.compile(r'(?:ext(?:n|ension)?|[#x])\s*[:.]?\s*(\d{1,6})\b', re.IGNORECASE)
+RE_DELIMITERS = re.compile(r'[/;,|]|\b(?:or|and|&)\b', re.IGNORECASE)
+RE_NON_DIGITS = re.compile(r'\D')
+RE_REPETITIVE_DIGITS = re.compile(r'^(\d)\1{9}$')
+RE_DOT_ZERO = re.compile(r'\.0+$')
+RE_PREFIX_LABELS = re.compile(r'^(tel|mob|mobile|phone|ph|contact|call|m)[\s.:#-]*', re.IGNORECASE)
+RE_STRIP_QUOTES_START = re.compile(r"""^[`'"\s#]+""")
+RE_STRIP_QUOTES_END = re.compile(r"""[`'"\s#]+$""")
+RE_FORMATTING_CHARS = re.compile(r"[\s()\-./\\[\]:,;]")
+
 
 def clean_mobile(raw_number: Any, strict_prefix: bool = True) -> Tuple[Optional[str], str, Optional[str]]:
     """
@@ -120,7 +132,7 @@ def clean_mobile(raw_number: Any, strict_prefix: bool = True) -> Tuple[Optional[
         return None, 'invalid', f'Phone number must start with 6, 7, 8, or 9 (starts with {candidate[0]})'
 
     # Check for dummy/repetitive number (e.g. 9999999999, 8888888888, 7777777777)
-    if re.match(r'^(\d)\1{9}$', candidate):
+    if RE_REPETITIVE_DIGITS.match(candidate):
         return candidate, 'FLAGGED', f'Dummy or repetitive phone number ({trimmed})'
 
     # Determine status: 'valid' if already pristine 10 digits starting with 6-9 without modification, else 'cleaned'
@@ -161,21 +173,32 @@ def clean_phone_extended(raw_number: Any, strict_prefix: bool = True, default_ow
         'rejected_phones': []
     }
 
+    res['phone_rule_version'] = PHONE_VALIDATION_RULE_VERSION
+
     if not raw_text or raw_text.lower() in ('nan', 'none', 'null', 'na', '-', 'nil', 'n/a'):
         res['error_reason'] = 'Value is blank or null'
         return res
 
+    # Fast path: already clean 10-digit mobile number
+    if len(raw_text) == 10 and raw_text.isdigit() and raw_text[0] in '6789':
+        if not RE_REPETITIVE_DIGITS.match(raw_text):
+            res['primary_phone'] = raw_text
+            res['status'] = 'valid'
+            res['phone_validity'] = 'valid'
+            res['phone_type'] = 'mobile'
+            return res
+
     working = raw_text
 
     # 1. Extract extensions if present (e.g. ext 102, extn 45, x102, #45)
-    ext_match = re.search(r'(?:ext(?:n|ension)?|[#x])\s*[:.]?\s*(\d{1,6})\b', working, flags=re.IGNORECASE)
+    ext_match = RE_EXTENSION.search(working)
     if ext_match:
         res['extension'] = ext_match.group(1)
         working = working[:ext_match.start()] + working[ext_match.end():]
         working = working.strip()
 
     # 2. Check for multiple numbers using delimiters
-    parts = re.split(r'[/;,|]|\b(?:or|and|&)\b', working, flags=re.IGNORECASE)
+    parts = RE_DELIMITERS.split(working)
     parts = [p.strip() for p in parts if p.strip()]
 
     valid_mobiles = []
@@ -190,7 +213,7 @@ def clean_phone_extended(raw_number: Any, strict_prefix: bool = True, default_ow
         elif cleaned_part and part_status == 'FLAGGED':
             flagged_mobiles.append((cleaned_part, part_reason))
         else:
-            digits = re.sub(r'\D', '', part)
+            digits = RE_NON_DIGITS.sub('', part)
             if digits.startswith('91') and len(digits) >= 12:
                 digits = digits[2:]
             
