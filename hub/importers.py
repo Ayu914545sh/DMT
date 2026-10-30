@@ -1180,27 +1180,28 @@ def stage_and_validate_batch(batch: ImportBatch, strict_phone: bool = True, prog
                     phone_res = clean_phone_extended(raw_mobile, strict_prefix=strict_phone, default_ownership='director')
                     
                     phone_status = phone_res['status']
-                    if phone_status in ('valid', 'cleaned'):
-                        canonical_phone = phone_res['primary_phone']
-                    else:
-                        canonical_phone = None
+                    canonical_phone = phone_res['primary_phone'] if (phone_res['primary_phone'] and phone_status in ('valid', 'cleaned', 'multiple_numbers_review')) else None
                     
                     cleaned_row['original_phone'] = phone_res['raw_value']
                     cleaned_row['canonical_mobile'] = canonical_phone
                     cleaned_row['cleaned_phone'] = canonical_phone
+                    cleaned_row['directorMobile'] = canonical_phone or ""
                     cleaned_row['secondary_phones'] = phone_res['secondary_phones']
                     cleaned_row['extension'] = phone_res['extension']
                     cleaned_row['phone_validity'] = phone_status
                     cleaned_row['phone_status'] = phone_status
                     cleaned_row['phone_ownership'] = 'director'
                     cleaned_row['phone_type'] = phone_res['phone_type']
+                    cleaned_row['phone_reason'] = phone_res.get('error_reason') or ""
+                    cleaned_row['rejected_phones'] = phone_res.get('rejected_phones', [])
 
                     if phone_status in ('invalid', 'multiple_numbers_review', 'FLAGGED'):
                         validation_msgs.append(f"Mobile flagged ({phone_status}): {phone_res['error_reason']}")
                         if status != 'ERROR':
                             status = 'WARNING'
-                        missing_invalid += 1
-                    elif phone_status in ('missing', 'BLANK'):
+                        if not canonical_phone:
+                            missing_invalid += 1
+                    elif phone_status in ('missing', 'BLANK', 'landline'):
                         missing_invalid += 1
 
                 # Clean date of incorporation strictly if selected
@@ -1248,27 +1249,28 @@ def stage_and_validate_batch(batch: ImportBatch, strict_phone: bool = True, prog
                     phone_res = clean_phone_extended(raw_mobile, strict_prefix=strict_phone, default_ownership='company')
                     
                     phone_status = phone_res['status']
-                    if phone_status in ('valid', 'cleaned'):
-                        canonical_phone = phone_res['primary_phone']
-                    else:
-                        canonical_phone = None
+                    canonical_phone = phone_res['primary_phone'] if (phone_res['primary_phone'] and phone_status in ('valid', 'cleaned', 'multiple_numbers_review')) else None
 
                     cleaned_row['original_phone'] = phone_res['raw_value']
                     cleaned_row['canonical_mobile'] = canonical_phone
                     cleaned_row['cleaned_phone'] = canonical_phone
+                    cleaned_row['mobile'] = canonical_phone or ""
                     cleaned_row['secondary_phones'] = phone_res['secondary_phones']
                     cleaned_row['extension'] = phone_res['extension']
                     cleaned_row['phone_validity'] = phone_status
                     cleaned_row['phone_status'] = phone_status
                     cleaned_row['phone_ownership'] = 'company'
                     cleaned_row['phone_type'] = phone_res['phone_type']
+                    cleaned_row['phone_reason'] = phone_res.get('error_reason') or ""
+                    cleaned_row['rejected_phones'] = phone_res.get('rejected_phones', [])
 
                     if phone_status in ('invalid', 'multiple_numbers_review', 'FLAGGED'):
                         validation_msgs.append(f"Mobile flagged ({phone_status}): {phone_res['error_reason']}")
                         if status != 'ERROR':
                             status = 'WARNING'
-                        missing_invalid += 1
-                    elif phone_status in ('missing', 'BLANK'):
+                        if not canonical_phone:
+                            missing_invalid += 1
+                    elif phone_status in ('missing', 'BLANK', 'landline'):
                         missing_invalid += 1
 
                 # Clean email strictly if selected
@@ -1618,9 +1620,14 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                         c_data = s.cleaned_data
                         dir_name = (c_data.get('directorName') or '').strip()
                         if dir_name:
-                            raw_mobile = c_data.get('directorMobile') or ''
-                            canonical_mobile = s.canonical_mobile or None
+                            raw_mobile = c_data.get('original_phone') or c_data.get('directorMobile') or ''
                             phone_validity = c_data.get('phone_validity') or 'missing'
+                            clean_valid_phone = None
+                            if s.canonical_mobile and phone_validity in ('valid', 'cleaned', 'multiple_numbers_review'):
+                                clean_digits = re.sub(r'\D', '', str(s.canonical_mobile))
+                                if len(clean_digits) == 10 and clean_digits[0] in '6789' and not re.match(r'^(\d)\1{9}$', clean_digits):
+                                    clean_valid_phone = clean_digits
+                            canonical_mobile = clean_valid_phone
                             dir_email = c_data.get('directorEmail') or ''
                             designation = 'Designated Partner' if comp.entity_type == 'llp' else 'Director'
 
@@ -1690,9 +1697,14 @@ def execute_import_publication(batch: ImportBatch, user: Optional[Any] = None, p
                         except ValueError:
                             pass
                     insert_time, _, _ = clean_timestamp(c_data.get('insert_time'))
-                    raw_mobile = c_data.get('mobile') or ''
-                    canonical_mobile = s.canonical_mobile or None
+                    raw_mobile = c_data.get('original_phone') or c_data.get('mobile') or ''
                     phone_validity = c_data.get('phone_validity') or 'missing'
+                    clean_valid_phone = None
+                    if s.canonical_mobile and phone_validity in ('valid', 'cleaned', 'multiple_numbers_review'):
+                        clean_digits = re.sub(r'\D', '', str(s.canonical_mobile))
+                        if len(clean_digits) == 10 and clean_digits[0] in '6789' and not re.match(r'^(\d)\1{9}$', clean_digits):
+                            clean_valid_phone = clean_digits
+                    canonical_mobile = clean_valid_phone
                     clean_pin = (c_data.get('clean_pincode') or c_data.get('Pincode') or '')[:32]
 
                     lineage = {

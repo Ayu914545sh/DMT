@@ -157,7 +157,8 @@ def clean_phone_extended(raw_number: Any, strict_prefix: bool = True, default_ow
         'phone_validity': 'missing',
         'phone_type': 'missing',
         'ownership': default_ownership,
-        'error_reason': None
+        'error_reason': None,
+        'rejected_phones': []
     }
 
     if not raw_text or raw_text.lower() in ('nan', 'none', 'null', 'na', '-', 'nil', 'n/a'):
@@ -189,49 +190,64 @@ def clean_phone_extended(raw_number: Any, strict_prefix: bool = True, default_ow
         elif cleaned_part and part_status == 'FLAGGED':
             flagged_mobiles.append((cleaned_part, part_reason))
         else:
-            # Check if landline (starts with 0 or 1-5, 8-11 digits)
             digits = re.sub(r'\D', '', part)
             if digits.startswith('91') and len(digits) >= 12:
                 digits = digits[2:]
             
             if (len(digits) in (10, 11) and digits.startswith('0')) or (len(digits) in (8, 9, 10) and digits[0] in ('1', '2', '3', '4', '5')):
-                other_numbers.append(('landline', digits))
+                other_numbers.append(('landline', digits, part_reason or "Landline phone format"))
             elif digits:
-                other_numbers.append(('invalid', digits))
+                other_numbers.append(('invalid', digits, part_reason or f"Invalid phone digits ({part})"))
             if part_reason:
                 reasons.append(part_reason)
 
-    if len(valid_mobiles) == 1 and len(parts) == 1 and not flagged_mobiles:
+    rejected_parts = []
+    for num, r in flagged_mobiles:
+        rejected_parts.append({'number': num, 'reason': r, 'type': 'FLAGGED'})
+    for t, d, r in other_numbers:
+        rejected_parts.append({'number': d, 'reason': r, 'type': t})
+
+    res['rejected_phones'] = rejected_parts
+
+    if len(valid_mobiles) == 1 and len(parts) == 1 and not flagged_mobiles and not other_numbers:
         num, stat = valid_mobiles[0]
         res['primary_phone'] = num
         res['status'] = stat
         res['phone_validity'] = stat
         res['phone_type'] = 'mobile'
+        res['error_reason'] = None
+    elif len(valid_mobiles) >= 1:
+        res['primary_phone'] = valid_mobiles[0][0]
+        res['secondary_phones'] = [m[0] for m in valid_mobiles[1:]]
+        if rejected_parts or len(valid_mobiles) > 1:
+            res['status'] = 'multiple_numbers_review'
+            res['phone_validity'] = 'multiple_numbers_review'
+            if rejected_parts:
+                res['error_reason'] = f"Multi-number cell has valid primary {valid_mobiles[0][0]} with rejected part(s): {', '.join(r['number'] for r in rejected_parts)}"
+            else:
+                res['error_reason'] = f"Multiple valid phone numbers present ({raw_text})"
+        else:
+            res['status'] = valid_mobiles[0][1]
+            res['phone_validity'] = valid_mobiles[0][1]
+            res['error_reason'] = None
+        res['phone_type'] = 'mobile'
     elif flagged_mobiles and not valid_mobiles:
-        num, reason = flagged_mobiles[0]
-        res['primary_phone'] = num
+        res['primary_phone'] = None
         res['status'] = 'FLAGGED'
         res['phone_validity'] = 'FLAGGED'
         res['phone_type'] = 'mobile'
-        res['error_reason'] = reason
-    elif len(valid_mobiles) >= 1:
-        res['primary_phone'] = valid_mobiles[0][0]
-        res['secondary_phones'] = [m[0] for m in valid_mobiles[1:]] + [num for _, num in other_numbers]
-        res['status'] = 'multiple_numbers_review'
-        res['phone_validity'] = 'multiple_numbers_review'
-        res['phone_type'] = 'mobile'
-        res['error_reason'] = f"Multiple phone numbers present ({raw_text})"
+        res['error_reason'] = flagged_mobiles[0][1]
     elif other_numbers:
-        first_type, first_num = other_numbers[0]
-        res['primary_phone'] = first_num if first_type == 'landline' else None
-        res['secondary_phones'] = [num for _, num in other_numbers[1:]]
-        res['status'] = 'landline' if first_type == 'landline' else 'invalid'
+        res['primary_phone'] = None
+        first_t, first_d, first_r = other_numbers[0]
+        res['status'] = 'landline' if first_t == 'landline' else 'invalid'
         res['phone_validity'] = res['status']
-        res['phone_type'] = first_type
-        if first_type == 'landline':
+        res['phone_type'] = first_t
+        if first_t == 'landline':
             res['ownership'] = 'company'
-        res['error_reason'] = reasons[0] if reasons else f"Invalid phone format ({raw_text})"
+        res['error_reason'] = first_r
     else:
+        res['primary_phone'] = None
         res['status'] = 'invalid'
         res['phone_validity'] = 'invalid'
         res['phone_type'] = 'invalid'

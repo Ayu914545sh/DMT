@@ -47,6 +47,7 @@ from .forms import (
     GSTRecordForm, ExportRequestForm, AdminPasswordChangeForm
 )
 from .exporters import (
+    invalidate_stale_exports_for_batch,
     run_export_job, export_mca_dataset, export_gst_dataset,
     export_cleaned_master_data, export_ready_to_call_list,
     export_review_report, export_audit_output, export_processing_summary
@@ -595,6 +596,7 @@ def import_map_view(request, batch_id):
                 messages.warning(request, w)
             
         # Invalidate any previously staged rows and reset preview metrics on mapping change
+        invalidate_stale_exports_for_batch(batch.batch_id)
         StagedRow.objects.filter(batch=batch).delete()
         batch.proposed_new_records = 0
         batch.proposed_updates = 0
@@ -785,6 +787,7 @@ def import_reclean_view(request, batch_id):
         return redirect('hub:import_progress_page', batch_id=batch.batch_id)
 
     # Invalidate existing staged records and reset preview counters before recleaning
+    invalidate_stale_exports_for_batch(batch.batch_id)
     StagedRow.objects.filter(batch=batch).delete()
     batch.proposed_new_records = 0
     batch.proposed_updates = 0
@@ -827,6 +830,7 @@ def import_reset_view(request, batch_id):
     if batch.status == 'COMPLETED':
         messages.warning(request, "Completed batches cannot be reset.")
         return redirect('hub:import_batch_detail', batch_id=batch.batch_id)
+    invalidate_stale_exports_for_batch(batch.batch_id)
     StagedRow.objects.filter(batch=batch).delete()
     batch.status = 'UPLOADED'
     batch.proposed_new_records = 0
@@ -1135,14 +1139,22 @@ def download_cleaning_report_view(request, batch_id):
         cleaned = s.cleaned_data
         entity_id = cleaned.get('entityId') or cleaned.get('gst_number') or ""
         extra_json = json.dumps(cleaned.get('extra_data', {})) if cleaned.get('extra_data') else ""
+        validity = cleaned.get('phone_validity') or cleaned.get('phone_status') or ""
+        clean_mob = ""
+        if validity in ('valid', 'cleaned', 'multiple_numbers_review'):
+            raw_c = cleaned.get('canonical_mobile') or cleaned.get('cleaned_phone') or ""
+            d = re.sub(r'\D', '', str(raw_c))
+            if len(d) == 10 and d[0] in '6789' and not re.match(r'^(\d)\1{9}$', d):
+                clean_mob = d
+
         writer.writerow([
             s.row_number,
             s.proposed_action,
             s.validation_status,
             sanitize_spreadsheet_value("; ".join(s.validation_messages)),
-            sanitize_spreadsheet_value(cleaned.get('original_phone') or cleaned.get('directorMobile') or cleaned.get('mobile') or ""),
-            sanitize_spreadsheet_value(cleaned.get('canonical_mobile') or cleaned.get('cleaned_phone') or ""),
-            cleaned.get('phone_validity') or cleaned.get('phone_status') or "",
+            sanitize_spreadsheet_value(cleaned.get('original_phone') or ""),
+            sanitize_spreadsheet_value(clean_mob),
+            validity,
             sanitize_spreadsheet_value(cleaned.get('email') or cleaned.get('directorEmail') or ""),
             sanitize_spreadsheet_value(cleaned.get('pan') or ""),
             sanitize_spreadsheet_value(entity_id),

@@ -138,3 +138,4 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS(f"Found {found.count()}/{len(sample_staged_gst)} sample records in GSTRecord table:"))
                 for rec in found:
                     self.stdout.write(f"  * GSTIN: {rec.gst_number} | Trade Name: {rec.trade_name[:35]} | State: {rec.state}")
+

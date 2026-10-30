@@ -6,7 +6,11 @@ and generates both CSV and XLSX output formats with bounded streaming memory.
 
 import os
 import csv
-from typing import List, Dict, Any, Optional, Iterator
+import re
+import logging
+
+logger = logging.getLogger(__name__)
+from typing import List, Dict, Any, Optional, Iterator, Tuple
 import openpyxl
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
@@ -16,6 +20,18 @@ from django.utils import timezone
 from .models import MCACompany, MCADirectorEntry, GSTRecord, ExportJob, AuditEvent, StagedRow
 from .cleaners import sanitize_spreadsheet_value
 
+
+
+
+def _valid_phone_or_blank(phone: Any, validity: Any) -> str:
+    """Authoritative phone validator for export: returns 10-digit clean string or empty string."""
+    if not phone:
+        return ""
+    digits = re.sub(r'\D', '', str(phone))
+    if len(digits) == 10 and digits[0] in '6789' and not re.match(r'^(\d)\1{9}$', digits):
+        if validity in ('valid', 'cleaned', 'multiple_numbers_review'):
+            return digits
+    return ""
 
 def sanitize_text(val: Any) -> str:
     """Removes invalid XML/Excel characters and applies formula protection."""
@@ -31,12 +47,16 @@ def stream_rows_to_export(
     row_generator: Iterator[List[Any]],
     file_path: str,
     file_format: str = 'CSV',
-    sheet_title: str = 'Export'
+    sheet_title: str = 'Export',
+    extra_sheets: Optional[List[Tuple[str, List[str], Iterator[List[Any]]]]] = None
 ) -> str:
     """
     Streams rows directly to disk in CSV or write-only XLSX format with constant memory.
-    Automatically handles worksheet row limit (>1,048,500) by splitting worksheets if necessary.
+    Automatically formats text cells as '@' to preserve leading zeros and prevent scientific notation.
+    Supports splitting worksheets beyond 1,048,500 rows and adding auxiliary sheets (e.g. Phone Review).
     """
+    from openpyxl.cell import WriteOnlyCell
+
     file_format = file_format.upper()
     if file_format == 'CSV':
         with open(file_path, 'w', newline='', encoding='utf-8') as f:
@@ -61,8 +81,25 @@ def stream_rows_to_export(
                 ws.append(headers)
                 current_sheet_rows = 1
 
-            ws.append([sanitize_text(v) for v in row])
+            row_cells = []
+            for v in row:
+                c = WriteOnlyCell(ws, value=sanitize_text(v))
+                c.number_format = '@'
+                row_cells.append(c)
+            ws.append(row_cells)
             current_sheet_rows += 1
+
+        if extra_sheets:
+            for ex_title, ex_headers, ex_gen in extra_sheets:
+                ex_ws = wb.create_sheet(title=ex_title[:31])
+                ex_ws.append(ex_headers)
+                for ex_row in ex_gen:
+                    row_cells = []
+                    for v in ex_row:
+                        c = WriteOnlyCell(ex_ws, value=sanitize_text(v))
+                        c.number_format = '@'
+                        row_cells.append(c)
+                    ex_ws.append(row_cells)
 
         wb.save(file_path)
         wb.close()
@@ -102,7 +139,8 @@ def export_mca_dataset(queryset, columns: Optional[List[str]] = None, file_forma
                 elif col in ('raw_mobile', 'original_phone'):
                     row.append("; ".join(d.raw_mobile for d in directors if d.raw_mobile))
                 elif col in ('canonical_mobile', 'cleaned_phone'):
-                    row.append("; ".join(d.canonical_mobile for d in directors if d.canonical_mobile))
+                    valid_nums = [_valid_phone_or_blank(d.canonical_mobile, d.contact_validity) for d in directors]
+                    row.append("; ".join(v for v in valid_nums if v))
                 elif col in ('contact_validity', 'phone_status'):
                     row.append("; ".join(d.contact_validity for d in directors if d.contact_validity))
                 elif col == 'designation':
@@ -140,7 +178,13 @@ def export_gst_dataset(queryset, columns: Optional[List[str]] = None, file_forma
 
     def _row_gen():
         for rec in qs.iterator(chunk_size=export_chunk_size):
-            yield [getattr(rec, col, "") for col in columns]
+            row = []
+            for col in columns:
+                if col in ('canonical_mobile', 'cleaned_phone'):
+                    row.append(_valid_phone_or_blank(rec.canonical_mobile, rec.contact_validity))
+                else:
+                    row.append(getattr(rec, col, ""))
+            yield row
 
     return stream_rows_to_export(columns, _row_gen(), file_path, file_format=file_format, sheet_title="GST Export")
 
@@ -246,10 +290,11 @@ def export_cleaned_master_data(batch, file_format: str = 'CSV', export_dir: Opti
             ('din', 'DIN', lambda s, c: c.get('din') or c.get('clean_din', ''), 'din'),
             ('directorName', 'Director Name', lambda s, c: c.get('directorName', ''), 'directorName'),
             ('designation', 'Designation', lambda s, c: ('Director' if c.get('directorName') else ''), 'directorName'),
-            ('directorMobile', 'Normalized Phone', lambda s, c: c.get('canonical_mobile', ''), 'directorMobile'),
+            ('directorMobile', 'Normalized Phone', lambda s, c: _valid_phone_or_blank(c.get('canonical_mobile'), c.get('phone_validity')), 'directorMobile'),
             ('extension', 'Extension', lambda s, c: c.get('extension', ''), 'directorMobile'),
             ('secondary_phones', 'Secondary Phones', lambda s, c: (", ".join(c.get('secondary_phones', [])) if c.get('secondary_phones') else ""), 'directorMobile'),
             ('phone_validity', 'Phone Validity', lambda s, c: c.get('phone_validity', 'missing'), 'directorMobile'),
+            ('phone_reason', 'Phone Validation Reason', lambda s, c: c.get('phone_reason') or c.get('error_reason') or '', 'directorMobile'),
             ('phone_ownership', 'Phone Ownership', lambda s, c: c.get('phone_ownership', 'director'), 'directorMobile'),
             ('directorEmail', 'Director Email', lambda s, c: c.get('directorEmail', ''), 'directorEmail'),
             ('source_file', 'Source File', lambda s, c: c.get('source_file', batch.file_name), 'provenance'),
@@ -267,10 +312,11 @@ def export_cleaned_master_data(batch, file_format: str = 'CSV', export_dir: Opti
             ('registration_date', 'Registration Date', lambda s, c: c.get('clean_registration_date') or c.get('registration_date', ''), 'registration_date'),
             ('gst_type', 'GST Type', lambda s, c: c.get('gst_type', ''), 'gst_type'),
             ('pan', 'PAN', lambda s, c: c.get('pan', ''), 'pan'),
-            ('mobile', 'Normalized Phone', lambda s, c: c.get('canonical_mobile', ''), 'mobile'),
+            ('mobile', 'Normalized Phone', lambda s, c: _valid_phone_or_blank(c.get('canonical_mobile'), c.get('phone_validity')), 'mobile'),
             ('extension', 'Extension', lambda s, c: c.get('extension', ''), 'mobile'),
             ('secondary_phones', 'Secondary Phones', lambda s, c: (", ".join(c.get('secondary_phones', [])) if c.get('secondary_phones') else ""), 'mobile'),
             ('phone_validity', 'Phone Validity', lambda s, c: c.get('phone_validity', 'missing'), 'mobile'),
+            ('phone_reason', 'Phone Validation Reason', lambda s, c: c.get('phone_reason') or c.get('error_reason') or '', 'mobile'),
             ('phone_ownership', 'Phone Ownership', lambda s, c: c.get('phone_ownership', 'company'), 'mobile'),
             ('email', 'Email', lambda s, c: c.get('email', ''), 'email'),
             ('address', 'Address', lambda s, c: c.get('address', ''), 'address'),
@@ -316,7 +362,31 @@ def export_cleaned_master_data(batch, file_format: str = 'CSV', export_dir: Opti
             c = s.cleaned_data
             yield [fn(s, c) for _, fn in active_fields]
 
-    return stream_rows_to_export(headers, _row_gen(), file_path, file_format=file_format, sheet_title="Cleaned Master Data")
+    extra_sheets = None
+    phone_target = 'directorMobile' if batch.dataset_type == 'MCA' else 'mobile'
+    if file_format == 'XLSX' and phone_target in imported_targets:
+        # Build Phone Review Sheet for invalid/uncertain phone values
+        review_headers = [
+            'Source Row', 'Entity Identifier', 'Company / Trade Name', 'Contact Name',
+            'Original Raw Phone', 'Phone Validity', 'Rejection / Validation Reason', 'Rejected Parts'
+        ]
+        def _review_gen():
+            for s in staged_rows.iterator(chunk_size=export_chunk_size):
+                c = s.cleaned_data
+                pstat = c.get('phone_validity')
+                rej = c.get('rejected_phones') or []
+                if pstat in ('invalid', 'multiple_numbers_review', 'FLAGGED', 'landline') or rej:
+                    eid = c.get('entityId') or c.get('gst_number') or ""
+                    cname = c.get('company_name') or c.get('name') or c.get('trade_name') or c.get('legal_name') or ""
+                    dname = c.get('directorName') or ""
+                    raw_p = c.get('original_phone') or ""
+                    reason = c.get('phone_reason') or f"Phone format flagged ({pstat})"
+                    rej_text = ", ".join(f"{r.get('number', '')} ({r.get('reason', '')})" for r in rej) if rej else ""
+                    yield [s.row_number, eid, cname, dname, raw_p, pstat, reason, rej_text]
+
+        extra_sheets = [('Phone Review', review_headers, _review_gen())]
+
+    return stream_rows_to_export(headers, _row_gen(), file_path, file_format=file_format, sheet_title="Cleaned Master Data", extra_sheets=extra_sheets)
 
 
 def _build_ready_to_call_row(phone: str, occurrences: List[Any], batch) -> List[Any]:
@@ -410,16 +480,23 @@ def export_ready_to_call_list(batch, file_format: str = 'CSV', export_dir: Optio
         occurrences = []
 
         for s in staged_qs.iterator(chunk_size=export_chunk_size):
+            if s.proposed_action == 'QUARANTINE' or s.validation_status == 'ERROR':
+                continue
             c = s.cleaned_data
             phone = s.canonical_mobile
-            if not (phone and len(phone) == 10 and c.get('phone_validity') in ('valid', 'cleaned', 'multiple_numbers_review')):
+            if not phone:
+                continue
+            digits = re.sub(r'\D', '', str(phone))
+            if len(digits) != 10 or digits[0] not in '6789' or re.match(r'^(\d)\1{9}$', digits):
+                continue
+            if c.get('phone_validity') not in ('valid', 'cleaned', 'multiple_numbers_review'):
                 continue
 
-            if current_phone is not None and phone != current_phone:
+            if current_phone is not None and digits != current_phone:
                 yield _build_ready_to_call_row(current_phone, occurrences, batch)
                 occurrences = []
 
-            current_phone = phone
+            current_phone = digits
             occurrences.append((s.row_number, c))
 
         if current_phone is not None and occurrences:
@@ -447,6 +524,18 @@ def export_review_report(batch, file_format: str = 'CSV', export_dir: Optional[s
         'Actionable Review Reason', 'Suggested Action', 'Source Reference'
     ]
 
+    mapping_config = batch.mapping_config or {}
+    selected_cols = mapping_config.get('selected_columns')
+    columns_mapping = mapping_config.get('columns') or {}
+
+    if selected_cols is not None:
+        selected_set = set(selected_cols)
+        imported_targets = {t for src, t in columns_mapping.items() if src in selected_set and t and t != 'skip'}
+    else:
+        imported_targets = {t for t in columns_mapping.values() if t and t != 'skip'}
+
+    phone_selected = ('directorMobile' in imported_targets) if batch.dataset_type == 'MCA' else ('mobile' in imported_targets)
+
     export_chunk_size = getattr(settings, 'EXPORT_CHUNK_SIZE', 5000)
     staged_rows = StagedRow.objects.filter(batch=batch).order_by('row_number')
 
@@ -458,17 +547,19 @@ def export_review_report(batch, file_format: str = 'CSV', export_dir: Optional[s
             contact_name = c.get('directorName') or ""
             source_ref = f"{batch.file_name} (Row {s.row_number})"
 
-            phone_stat = c.get('phone_validity')
-            if phone_stat in ('invalid', 'multiple_numbers_review', 'FLAGGED'):
-                orig_phone = c.get('original_phone', '')
-                issue_code = 'MULTIPLE_NUMBERS' if phone_stat == 'multiple_numbers_review' else 'INVALID_PHONE_FORMAT'
-                reason = f"Phone format flagged ({phone_stat}): {orig_phone}"
-                suggestion = "Verify against official ROC filing or split secondary numbers manually" if phone_stat == 'multiple_numbers_review' else "Check digit count or area code"
-                yield [
-                    s.row_number, entity_id, comp_name, contact_name,
-                    'Mobile / Phone', orig_phone, s.validation_status, issue_code,
-                    reason, suggestion, source_ref
-                ]
+            if phone_selected:
+                phone_stat = c.get('phone_validity')
+                rej_phones = c.get('rejected_phones') or []
+                if phone_stat in ('invalid', 'multiple_numbers_review', 'FLAGGED', 'landline') or rej_phones:
+                    orig_phone = c.get('original_phone', '')
+                    issue_code = 'MULTIPLE_NUMBERS' if phone_stat == 'multiple_numbers_review' else ('FLAGGED_PHONE' if phone_stat == 'FLAGGED' else 'INVALID_PHONE_FORMAT')
+                    reason = c.get('phone_reason') or f"Phone format flagged ({phone_stat}): {orig_phone}"
+                    suggestion = "Verify against official ROC filing or split secondary numbers manually" if phone_stat == 'multiple_numbers_review' else "Check digit count or area code"
+                    yield [
+                        s.row_number, entity_id, comp_name, contact_name,
+                        'Mobile / Phone', orig_phone, s.validation_status, issue_code,
+                        reason, suggestion, source_ref
+                    ]
 
             for msg in s.validation_messages:
                 if "Mobile flagged" not in msg:
@@ -509,7 +600,7 @@ def export_audit_output(batch, file_format: str = 'CSV', export_dir: Optional[st
             entity_id = c.get('entityId') or c.get('gst_number') or ""
 
             orig_phone = c.get('original_phone', '')
-            clean_phone = c.get('canonical_mobile', '')
+            clean_phone = _valid_phone_or_blank(c.get('canonical_mobile'), c.get('phone_validity'))
             if orig_phone or clean_phone:
                 if orig_phone == clean_phone:
                     trans = "Pristine: No transformation required"
@@ -579,3 +670,27 @@ def export_processing_summary(batch) -> Dict[str, Any]:
             "Each source row represents a company-director relationship. Companies with multiple directors have repeated company rows preserving distinct contact endpoints."
         )
     }
+
+
+def invalidate_stale_exports_for_batch(batch_id: str, export_dir: Optional[str] = None) -> int:
+    """
+    Invalidates stale cached/generated export files for a batch when its
+    underlying cleaning rules, column mappings, or staged rows change.
+    """
+    export_dir = export_dir or os.path.join(settings.MEDIA_ROOT, 'exports')
+    if not os.path.exists(export_dir):
+        return 0
+    removed_count = 0
+    try:
+        for fname in os.listdir(export_dir):
+            if batch_id in fname:
+                fpath = os.path.join(export_dir, fname)
+                if os.path.isfile(fpath):
+                    try:
+                        os.remove(fpath)
+                        removed_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to remove stale export file {fpath}: {e}")
+    except Exception as e:
+        logger.warning(f"Error scanning export dir for stale batch files {batch_id}: {e}")
+    return removed_count

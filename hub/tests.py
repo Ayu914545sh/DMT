@@ -32,7 +32,7 @@ from hub.models import (
     BusinessLink
 )
 from hub.cleaners import (
-    clean_mobile, clean_email, clean_date, clean_timestamp, clean_capital,
+    clean_mobile, clean_phone_extended, clean_email, clean_date, clean_timestamp, clean_capital,
     clean_pincode, clean_pan, clean_gstin, clean_cin, clean_din,
     clean_name, clean_address, sanitize_spreadsheet_value
 )
@@ -43,7 +43,7 @@ from hub.importers import (
     get_excel_sheets, auto_detect_header_row, read_file_headers
 )
 from hub.services import perform_unified_search
-from hub.exporters import export_mca_dataset, export_gst_dataset, export_cleaned_master_data
+from hub.exporters import export_mca_dataset, export_gst_dataset, export_cleaned_master_data, export_ready_to_call_list, export_review_report, invalidate_stale_exports_for_batch
 from hub.forms import DatasetUploadForm
 
 
@@ -178,6 +178,112 @@ class MobileCleanerTestCase(TestCase):
         num_blank, status_blank, _ = clean_mobile("")
         self.assertIsNone(num_blank)
         self.assertEqual(status_blank, "missing")
+
+    def test_clean_phone_extended_multi_number_and_dummy_guards(self):
+        """Verifies clean_phone_extended handles dummy numbers, multi-numbers, and invalid parts."""
+        # Dummy repetitive number
+        res = clean_phone_extended("9999999999")
+        self.assertIsNone(res['primary_phone'])
+        self.assertEqual(res['phone_validity'], 'FLAGGED')
+        self.assertIn("Dummy or repetitive", res['error_reason'])
+
+        # Multi-number with valid primary and invalid secondary
+        res_m = clean_phone_extended("9876543210 / 12345")
+        self.assertEqual(res_m['primary_phone'], "9876543210")
+        self.assertEqual(res_m['phone_validity'], 'multiple_numbers_review')
+        self.assertEqual(len(res_m['rejected_phones']), 1)
+        self.assertEqual(res_m['rejected_phones'][0]['number'], "12345")
+
+        # Landline input
+        res_l = clean_phone_extended("011-23456789")
+        self.assertIsNone(res_l['primary_phone'])
+        self.assertEqual(res_l['phone_validity'], 'landline')
+
+    def test_excel_export_phone_guardrails(self):
+        """Verifies exports never output raw invalid phones, leave master cleaned phone blank, and keep ready-to-call clean."""
+        user, _ = User.objects.get_or_create(username='tester_phone_guard', email='guard@example.com')
+        batch = ImportBatch.objects.create(
+            batch_id="TEST-GUARD-001",
+            dataset_type="MCA",
+            file_name="Guard_Test.xlsx",
+            created_by=user,
+            total_input_rows=3,
+            mapping_config={
+                'selected_columns': ['Row Number', 'CIN', 'Company Name', 'Director Name', 'Director Mobile'],
+                'columns': {
+                    'Row Number': 'Row Number',
+                    'CIN': 'entityId',
+                    'Company Name': 'name',
+                    'Director Name': 'directorName',
+                    'Director Mobile': 'directorMobile'
+                }
+            }
+        )
+
+        # 1. Valid row
+        StagedRow.objects.create(
+            batch=batch, row_number=1,
+            raw_data={'CIN': 'U100', 'Director Mobile': '9876543210'},
+            cleaned_data={
+                'entityId': 'U100', 'canonical_mobile': '9876543210', 'cleaned_phone': '9876543210',
+                'original_phone': '9876543210', 'phone_validity': 'valid', 'directorMobile': '9876543210'
+            },
+            canonical_mobile='9876543210', validation_status='VALID', proposed_action='CREATE'
+        )
+
+        # 2. Dummy row (9999999999)
+        StagedRow.objects.create(
+            batch=batch, row_number=2,
+            raw_data={'CIN': 'U200', 'Director Mobile': '9999999999'},
+            cleaned_data={
+                'entityId': 'U200', 'canonical_mobile': None, 'cleaned_phone': None,
+                'original_phone': '9999999999', 'phone_validity': 'FLAGGED', 'directorMobile': '',
+                'phone_reason': 'Dummy or repetitive phone number'
+            },
+            canonical_mobile='', validation_status='WARNING', proposed_action='CREATE'
+        )
+
+        # 3. Multi-number with valid primary (9123456789 / 123)
+        StagedRow.objects.create(
+            batch=batch, row_number=3,
+            raw_data={'CIN': 'U300', 'Director Mobile': '9123456789 / 123'},
+            cleaned_data={
+                'entityId': 'U300', 'canonical_mobile': '9123456789', 'cleaned_phone': '9123456789',
+                'original_phone': '9123456789 / 123', 'phone_validity': 'multiple_numbers_review',
+                'directorMobile': '9123456789', 'rejected_phones': [{'number': '123', 'reason': 'Invalid'}]
+            },
+            canonical_mobile='9123456789', validation_status='WARNING', proposed_action='CREATE'
+        )
+
+        temp_dir = tempfile.mkdtemp()
+        master_path = export_cleaned_master_data(batch, file_format='XLSX', export_dir=temp_dir)
+        wb = openpyxl.load_workbook(master_path)
+        self.assertIn("Cleaned Master Data", wb.sheetnames)
+        self.assertIn("Phone Review", wb.sheetnames)
+
+        ws_main = wb["Cleaned Master Data"]
+        headers = [c.value for c in ws_main[1]]
+        phone_idx = headers.index("Normalized Phone")
+        rows = list(ws_main.iter_rows(min_row=2, values_only=False))
+
+        # Row 1: Valid mobile
+        self.assertEqual(rows[0][phone_idx].value, "9876543210")
+        self.assertEqual(rows[0][phone_idx].number_format, '@')
+
+        # Row 2: Dummy number MUST BE BLANK/NONE
+        self.assertIn(rows[1][phone_idx].value, ("", None))
+
+        # Row 3: Multi-number valid primary
+        self.assertEqual(rows[2][phone_idx].value, "9123456789")
+
+        # Ready-to-call must ONLY have 9876543210 and 9123456789
+        call_path = export_ready_to_call_list(batch, file_format='XLSX', export_dir=temp_dir)
+        wb_c = openpyxl.load_workbook(call_path)
+        call_phones = [r[0] for r in wb_c.active.iter_rows(min_row=2, values_only=True)]
+        self.assertIn("9876543210", call_phones)
+        self.assertIn("9123456789", call_phones)
+        self.assertNotIn("9999999999", call_phones)
+        self.assertEqual(len(call_phones), 2)
 
         num_spaces, status_spaces, _ = clean_mobile("   ")
         self.assertIsNone(num_spaces)
